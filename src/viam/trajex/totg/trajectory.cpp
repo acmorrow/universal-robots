@@ -11,6 +11,133 @@
 
 namespace viam::trajex::totg {
 
+namespace {
+
+// Computes maximum path velocity (s_dot) from joint velocity and acceleration limits.
+// Two constraints apply: centripetal acceleration from path curvature (eq 31) and
+// direct velocity limits (eq 36). Returns both so caller can take the minimum.
+// See Kunz & Stilman equations 31 and 36.
+[[gnu::pure]] [[maybe_unused]] auto compute_velocity_limits(const xt::xarray<double>& q_prime,
+                                                            const xt::xarray<double>& q_double_prime,
+                                                            const xt::xarray<double>& q_dot_max,
+                                                            const xt::xarray<double>& q_ddot_max,
+                                                            double epsilon) {
+    struct result {
+        double s_dot_max_acc;
+        double s_dot_max_vel;
+    };
+
+    // Compute the path velocity limit imposed by joint acceleration constraints (equation 31).
+    // This is the acceleration limit curve in the phase plane. The derivation in the paper
+    // converts joint acceleration bounds into constraints on path velocity by considering
+    // the centripetal acceleration term q''(s)*s_dot^2 that appears when following a curved
+    // path. The result is a set of downward-facing parabolas centered at the origin, and we
+    // take the minimum of their positive bounds to find the feasible path velocity.
+    double s_dot_max_accel = std::numeric_limits<double>::infinity();
+
+    // For each pair of joints that are moving along the path, compare their curvature ratios
+    // q''(s)/q'(s). When these ratios differ, the joints are curving at different rates, which
+    // limits how fast we can traverse the path. This is the pairwise constraint from equation 31.
+    for (size_t i = 0; i < q_prime.size(); ++i) {
+        if (std::abs(q_prime(i)) < epsilon) {
+            continue;
+        }
+
+        for (size_t j = i + 1; j < q_prime.size(); ++j) {
+            if (std::abs(q_prime(j)) < epsilon) {
+                continue;
+            }
+
+            const double curvature_ratio_i = q_double_prime(i) / q_prime(i);
+            const double curvature_ratio_j = q_double_prime(j) / q_prime(j);
+            const double curvature_difference = std::abs(curvature_ratio_i - curvature_ratio_j);
+
+            if (curvature_difference < epsilon) {
+                continue;
+            }
+
+            const double accel_sum = (q_ddot_max(i) / std::abs(q_prime(i))) + (q_ddot_max(j) / std::abs(q_prime(j)));
+            const double limit = std::sqrt(accel_sum / curvature_difference);
+            s_dot_max_accel = std::min(s_dot_max_accel, limit);
+        }
+    }
+
+    // A joint that is stationary in path space (q'(s) = 0) but has non-zero curvature (q''(s) != 0)
+    // also constrains the path velocity. From equations 19-20, when q'(s) = 0, the constraint
+    // q''(s)*s_dot^2 <= q_ddot_max directly limits s_dot. This case appears at points where a joint
+    // reaches a local extremum along the path while the path itself is curved.
+    for (size_t i = 0; i < q_prime.size(); ++i) {
+        if (std::abs(q_prime(i)) >= epsilon) {
+            continue;
+        }
+
+        if (std::abs(q_double_prime(i)) < epsilon) {
+            continue;
+        }
+
+        const double limit = std::sqrt(q_ddot_max(i) / std::abs(q_double_prime(i)));
+        s_dot_max_accel = std::min(s_dot_max_accel, limit);
+    }
+
+    // Compute the path velocity limit imposed by joint velocity constraints (equation 36).
+    // This is the velocity limit curve in the phase plane. For each joint moving along
+    // the path, the joint velocity q_dot = q'(s)*s_dot must respect the joint velocity
+    // limit, giving us s_dot <= q_dot_max / |q'(s)|. We take the minimum across all joints.
+    double s_dot_max_vel = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < q_prime.size(); ++i) {
+        if (std::abs(q_prime(i)) < epsilon) {
+            continue;
+        }
+
+        const double limit = q_dot_max(i) / std::abs(q_prime(i));
+        s_dot_max_vel = std::min(s_dot_max_vel, limit);
+    }
+
+    return result{s_dot_max_accel, s_dot_max_vel};
+}
+
+// Computes the feasible range of path acceleration (s_ddot) given current path velocity (s_dot)
+// and joint acceleration limits. The path acceleration must satisfy joint constraints in all DOF.
+// Using chain rule q''(t) = q'(s)*s_ddot + q''(s)*s_dot^2, we solve for s_ddot bounds.
+// See Kunz & Stilman equations 22-23.
+[[gnu::pure]] [[maybe_unused]] auto compute_acceleration_bounds(const xt::xarray<double>& q_prime,
+                                                                const xt::xarray<double>& q_double_prime,
+                                                                double s_dot,
+                                                                const xt::xarray<double>& q_ddot_max,
+                                                                double epsilon) {
+    struct result {
+        double s_ddot_min;
+        double s_ddot_max;
+    };
+
+    double s_ddot_min = -std::numeric_limits<double>::infinity();
+    double s_ddot_max = std::numeric_limits<double>::infinity();
+
+    // Each joint independently constrains the feasible range of path acceleration (equations 22-23).
+    // From the chain rule q''(t) = q'(s)*s_ddot + q''(s)*s_dot^2, we can solve for s_ddot given
+    // the constraint -q_ddot_max <= q''(t) <= q_ddot_max. The centripetal term q''(s)*s_dot^2 is
+    // already "using up" part of the acceleration budget at the current path velocity, which tightens
+    // the bounds on how much path acceleration we can apply. Each joint shrinks the feasible region,
+    // so we take the intersection by using max for lower bounds and min for upper bounds.
+    for (size_t i = 0; i < q_prime.size(); ++i) {
+        if (std::abs(q_prime(i)) < epsilon) {
+            continue;
+        }
+
+        const double centripetal_term = q_double_prime(i) * s_dot * s_dot;
+
+        const double min_from_joint = (-q_ddot_max(i) - centripetal_term) / q_prime(i);
+        s_ddot_min = std::max(s_ddot_min, min_from_joint);
+
+        const double max_from_joint = (q_ddot_max(i) - centripetal_term) / q_prime(i);
+        s_ddot_max = std::min(s_ddot_max, max_from_joint);
+    }
+
+    return result{s_ddot_min, s_ddot_max};
+}
+
+}  // namespace
+
 trajectory::trajectory(class path p, options opt, integration_points points)
     : path_{std::move(p)}, options_{std::move(opt)}, integration_points_{std::move(points)} {
     if (path_.empty() || path_.length() <= arc_length{0.0}) {
@@ -47,6 +174,14 @@ trajectory trajectory::create(class path p, options opt, integration_points test
 
     if (opt.max_acceleration.shape(0) != p.dof()) {
         throw std::invalid_argument{"max_acceleration DOF doesn't match path DOF"};
+    }
+
+    if (!xt::all(xt::isfinite(opt.max_velocity) && opt.max_velocity >= 0.0)) {
+        throw std::invalid_argument{"max_velocity must be finite and non-negative"};
+    }
+
+    if (!xt::all(xt::isfinite(opt.max_acceleration) && opt.max_acceleration >= 0.0)) {
+        throw std::invalid_argument{"max_acceleration must be finite and non-negative"};
     }
 
     if (opt.delta <= seconds{0.0}) {
