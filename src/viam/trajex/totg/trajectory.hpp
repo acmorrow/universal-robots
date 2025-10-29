@@ -128,13 +128,13 @@ class trajectory {
     ///
     /// @param p Path to time-parameterize (moved into trajectory)
     /// @param opt Trajectory generation options (moved into trajectory)
-    /// @param test_points Optional integration points for testing (bypasses TOTG algorithm).
-    ///                    If provided, must be sorted by time with first point at t=0.
+    /// @param points Optional integration points for testing (bypasses TOTG algorithm).
+    ///               If provided, must be sorted by time with first point at t=0.
     /// @return Time-parameterized trajectory
     /// @throws std::invalid_argument if options.max_velocity/acceleration DOF doesn't match path DOF,
     ///         if options.delta/epsilon are non-positive, or if test_points are invalid
     ///
-    [[nodiscard]] static trajectory create(path p, options opt, integration_points test_points = {});
+    [[nodiscard]] static trajectory create(path p, options opt, integration_points points = {});
 
     ///
     /// Gets total duration of trajectory.
