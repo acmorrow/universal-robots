@@ -579,6 +579,11 @@ void path::cursor::update_hint_() noexcept {
     // This optimization provides O(1) amortized performance for sequential traversal
     // (the common case during trajectory integration) by checking nearby segments before
     // falling back to binary search for large jumps.
+    //
+    // TODO: Optimize hint update by detecting seek direction (forward vs backward from previous
+    // position). We can skip checks that won't work based on direction (e.g., don't check prev
+    // segment when moving forward), simplifying logic and improving performance for directional
+    // sequential access patterns.
 
     auto current_view = *hint_;
 
