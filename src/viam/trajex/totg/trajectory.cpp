@@ -20,8 +20,7 @@ namespace {
 enum class integration_state : std::uint8_t {
     k_forward_accelerating,              // Forward integration with maximum acceleration
     k_forward_following_velocity_curve,  // Following velocity limit curve tangentially
-    k_backward_decelerating,             // Backward integration with minimum acceleration
-    k_done                               // Trajectory generation complete
+    k_backward_decelerating              // Backward integration with minimum acceleration
 };
 
 // Events that trigger state transitions during trajectory integration.
@@ -149,10 +148,11 @@ enum class integration_event : std::uint8_t {
 
         const double centripetal_term = q_double_prime(i) * s_dot * s_dot;
 
-        const double min_from_joint = (-q_ddot_max(i) - centripetal_term) / q_prime(i);
+        // Per equations 22-23: acceleration limit terms use |q'(s)|, centripetal term uses signed q'(s)
+        const double min_from_joint = (-q_ddot_max(i)) / std::abs(q_prime(i)) - (centripetal_term / q_prime(i));
         s_ddot_min = std::max(s_ddot_min, min_from_joint);
 
-        const double max_from_joint = (q_ddot_max(i) - centripetal_term) / q_prime(i);
+        const double max_from_joint = q_ddot_max(i) / std::abs(q_prime(i)) - (centripetal_term / q_prime(i));
         s_ddot_max = std::min(s_ddot_max, max_from_joint);
     }
 
@@ -255,7 +255,7 @@ enum class integration_event : std::uint8_t {
 //
 // Takes path::cursor by value (cheap copy) to seed forward search from current position.
 [[gnu::pure]] std::optional<trajectory::phase_point> find_acceleration_switching_point(path::cursor cursor,
-                                                                                        const trajectory::options& opt) {
+                                                                                       const trajectory::options& opt) {
     // Walk forward through segments, checking interior extrema first, then boundaries
     while (true) {
         auto current_segment = *cursor;
@@ -626,31 +626,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
         // Constructor initializes trajectory with initial point at rest (0, 0)
         trajectory traj{std::move(p), std::move(opt)};
 
-        // Observer helper lambdas to reduce conditional boilerplate
-        // Order matches observer interface declaration order
-        const auto maybe_on_started_forward_integration = [&](phase_point pt) {
-            if (traj.options_.observer) {
-                traj.options_.observer->on_started_forward_integration(pt);
-            }
-        };
-
-        const auto maybe_on_hit_limit_curve = [&](phase_point pt, double s_dot_max_acc, double s_dot_max_vel) {
-            if (traj.options_.observer) {
-                traj.options_.observer->on_hit_limit_curve(pt, s_dot_max_acc, s_dot_max_vel);
-            }
-        };
-
-        const auto maybe_on_started_backward_integration = [&](phase_point pt) {
-            if (traj.options_.observer) {
-                traj.options_.observer->on_started_backward_integration(pt);
-            }
-        };
-
-        const auto maybe_on_trajectory_extended = [&] {
-            if (traj.options_.observer) {
-                traj.options_.observer->on_trajectory_extended(traj);
-            }
-        };
 
         // Helper to detect intersection between backward trajectory and forward trajectory in phase plane.
         // Returns index in forward trajectory where intersection occurs, or nullopt if no intersection.
@@ -762,9 +737,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             // non-zero initial velocity) and throws an error instead of transitioning.
                             throw std::logic_error{"Invalid event for k_backward_decelerating state"};
                     }
-
-                case integration_state::k_done:
-                    throw std::logic_error{"Cannot transition from k_done state"};
             }
 
             throw std::logic_error{"Unhandled state in transition function"};
@@ -784,7 +756,9 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
         // events that carry context, rather than state machine-scoped variables.
         std::vector<integration_point> backward_points;
 
-        while (state != integration_state::k_done) {
+        // Integration loop runs until we've covered the entire path.
+        // Loop exits when last integration point reaches path end exactly.
+        while (traj.integration_points_.back().s != traj.path_.length()) {
             integration_event event = integration_event::k_none;
 
             switch (state) {
@@ -792,7 +766,9 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // On first entry to this state, notify observer we're starting forward integration
                     if (traj.integration_points_.size() == 1) {
                         // Only initial point exists - this is the very start of trajectory generation
-                        maybe_on_started_forward_integration({.s = arc_length{0.0}, .s_dot = 0.0});
+                        if (traj.options_.observer) {
+                            traj.options_.observer->on_started_forward_integration({.s = arc_length{0.0}, .s_dot = 0.0});
+                        }
                     }
 
                     // Starting point is the last integration point (known to be feasible)
@@ -868,7 +844,10 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         //
                         // Note: The phase_point passed to observer is the INFEASIBLE candidate point
                         // that exceeded limits, not a feasible point on the limit curve.
-                        maybe_on_hit_limit_curve({.s = next_s, .s_dot = next_s_dot}, s_dot_max_acc, s_dot_max_vel);
+
+                        if (traj.options_.observer) {
+                            traj.options_.observer->on_hit_limit_curve({.s = next_s, .s_dot = next_s_dot}, s_dot_max_acc, s_dot_max_vel);
+                        }
 
                         // Determine which limit curve we hit by comparing the two curves.
                         // The lower curve is the active constraint at this position.
@@ -902,8 +881,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                                              .s_dot = switching_point->s_dot,
                                              .s_ddot = 0.0};
                         backward_points.push_back(sp);
-
-                        maybe_on_started_backward_integration({.s = sp.s, .s_dot = sp.s_dot});
 
                         // Reuse k_reached_end event to transition to backward integration
                         event = integration_event::k_reached_end;
@@ -1008,8 +985,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                                              .s_ddot = 0.0};
                         backward_points.push_back(sp);
 
-                        maybe_on_started_backward_integration({.s = sp.s, .s_dot = sp.s_dot});
-
                         // Reuse k_reached_end event to transition to backward integration
                         event = integration_event::k_reached_end;
                         break;
@@ -1034,18 +1009,10 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     const auto [next_s, next_s_dot] =
                         euler_step(current_point.s, current_point.s_dot, s_ddot_curve, traj.options_.delta.count());
 
-                    // TODO: Investigate whether "up and to the right" assertion is valid during curve following.
-                    // When following a velocity limit curve tangentially, s_ddot_curve = curve_slope * s_dot.
-                    // If curve_slope < 0 (velocity limit curve descending), then s_ddot_curve < 0, causing
-                    // s_dot to decrease over time. This would violate the assertion below. Questions:
-                    // 1. Can velocity limit curves have negative slope in feasible forward integration regions?
-                    // 2. If so, is it physically correct to follow a descending curve (s increasing, s_dot decreasing)?
-                    // 3. Does the reference implementation in old_integration.cpp handle this case?
-                    // For now, keeping the assertion as a canary to detect this case if it occurs in testing.
-                    //
-                    // Forward integration should move "up and to the right" in phase plane
-                    if ((next_s <= current_point.s) || (next_s_dot < current_point.s_dot)) [[unlikely]] {
-                        throw std::runtime_error{"TOTG algorithm error: curve following must increase both s and s_dot"};
+                    // Curve following must advance along path (s increases), but s_dot can decrease
+                    // when following a descending velocity limit curve (negative slope).
+                    if (next_s <= current_point.s) [[unlikely]] {
+                        throw std::runtime_error{"TOTG algorithm error: curve following must increase s"};
                     }
 
                     // Check if we've reached the end of the path while following the curve
@@ -1094,7 +1061,9 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                                 "(higher s, lower s_dot)"};
                         }
 
-                        maybe_on_started_backward_integration({.s = switching_point.s, .s_dot = switching_point.s_dot});
+                        if (traj.options_.observer) {
+                            traj.options_.observer->on_started_backward_integration({.s = switching_point.s, .s_dot = switching_point.s_dot});
+                        }
                     }
 
                     // Starting point is the last backward integration point. On first entry to this state,
@@ -1126,9 +1095,10 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     const auto [candidate_s, candidate_s_dot] =
                         euler_step(current_point.s, current_point.s_dot, s_ddot_min, -traj.options_.delta.count());
 
-                    // Backward integration should move "up and to the left" in phase plane
-                    if ((candidate_s >= current_point.s) || (candidate_s_dot <= current_point.s_dot)) [[unlikely]] {
-                        throw std::runtime_error{"TOTG algorithm error: backward integration must decrease s and increase s_dot"};
+                    // Backward integration must decrease s (move backward) and not decrease s_dot.
+                    // At degenerate points (s_ddot ≈ 0), s_dot may stay constant (horizontal movement).
+                    if ((candidate_s >= current_point.s) || (candidate_s_dot < current_point.s_dot)) [[unlikely]] {
+                        throw std::runtime_error{"TOTG algorithm error: backward integration must decrease s and not decrease s_dot"};
                     }
 
                     // Check exit condition 1: Would candidate reach or pass the start of the path?
@@ -1222,7 +1192,9 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         backward_points.clear();
 
                         // Notify observer that trajectory has been extended with finalized backward segment
-                        maybe_on_trajectory_extended();
+                        if (traj.options_.observer) {
+                            traj.options_.observer->on_trajectory_extended(traj);
+                        }
 
                         event = integration_event::k_hit_forward_trajectory;
                         break;
@@ -1239,10 +1211,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // Cursor will be repositioned on next iteration entry
                     break;
                 }
-
-                case integration_state::k_done:
-                    // Unreachable due to while condition
-                    break;
             }
 
             if (event != integration_event::k_none) {
