@@ -27,13 +27,14 @@ enum class integration_state : std::uint8_t {
 // Events that trigger state transitions during trajectory integration.
 // These are internal implementation details - external code observes via integration_observer callbacks.
 enum class integration_event : std::uint8_t {
-    k_none,                   // No event (remain in current state)
-    k_hit_limit_curve,        // Hit velocity or acceleration limit curve
-    k_escaped_limit_curve,    // Dropped below limit curve (can resume normal acceleration)
-    k_found_switching_point,  // Found switching point along limit curve
-    k_reached_end,            // Reached end of path
-    k_reached_start,          // Reached start of path (backward integration)
-    k_hit_forward_trajectory  // Backward trajectory intersected forward trajectory
+    k_none,                    // No event (remain in current state)
+    k_hit_velocity_curve,      // Hit velocity limit curve (can potentially follow tangentially)
+    k_hit_acceleration_curve,  // Hit acceleration limit curve (must search for switching point)
+    k_escaped_limit_curve,     // Dropped below limit curve (can resume normal acceleration)
+    k_found_switching_point,   // Found switching point along limit curve
+    k_reached_end,             // Reached end of path
+    k_reached_start,           // Reached start of path (backward integration)
+    k_hit_forward_trajectory   // Backward trajectory intersected forward trajectory
 };
 
 // Computes maximum path velocity (s_dot) from joint velocity and acceleration limits.
@@ -163,10 +164,10 @@ enum class integration_event : std::uint8_t {
 // This is d/ds s_dot_max_vel(s), which tells us the slope of the velocity limit curve.
 // Used in Algorithm Step 3 to determine if we can leave the curve or must search for switching points.
 // See Kunz & Stilman equation 37.
-[[gnu::pure]] [[maybe_unused]] double compute_velocity_limit_derivative(const xt::xarray<double>& q_prime,
-                                                                        const xt::xarray<double>& q_double_prime,
-                                                                        const xt::xarray<double>& q_dot_max,
-                                                                        double epsilon) {
+[[gnu::pure]] double compute_velocity_limit_derivative(const xt::xarray<double>& q_prime,
+                                                       const xt::xarray<double>& q_double_prime,
+                                                       const xt::xarray<double>& q_dot_max,
+                                                       double epsilon) {
     // Find which joint is the limiting constraint (has minimum q_dot_max / |q'|)
     double min_limit = std::numeric_limits<double>::infinity();
     size_t limiting_joint = 0;
@@ -407,9 +408,16 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
             switch (current_state) {
                 case integration_state::k_forward_accelerating:
                     switch (event) {
-                        case integration_event::k_hit_limit_curve:
-                            // Will determine in next iteration whether to follow curve or search
+                        case integration_event::k_hit_velocity_curve:
+                            // Hit velocity limit curve - can potentially follow it tangentially
                             return integration_state::k_forward_following_velocity_curve;
+                        case integration_event::k_hit_acceleration_curve:
+                            // Hit acceleration limit curve. These curves arise from path curvature consuming
+                            // the acceleration budget (eq 31) and cannot be followed tangentially like velocity
+                            // curves. They constrain s_ddot directly based on centripetal requirements, making
+                            // them boundaries rather than curves we can track in (s, s_dot) phase plane.
+                            // Must search for a switching point where we can leave the boundary.
+                            return integration_state::k_forward_searching_switching_point;
                         case integration_event::k_reached_end:
                             // Reaching end during forward acceleration means we found a switching point
                             // at the end (rest at s_final). Must do backward integration.
@@ -422,11 +430,12 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     switch (event) {
                         case integration_event::k_escaped_limit_curve:
                             return integration_state::k_forward_accelerating;
-                        case integration_event::k_hit_limit_curve:
-                            // Still on curve or need to search
+                        case integration_event::k_hit_acceleration_curve:
+                            // Detected we need to search for switching point
                             return integration_state::k_forward_searching_switching_point;
                         case integration_event::k_reached_end:
-                            return integration_state::k_done;
+                            // Reaching end while on curve is a switching point - need backward pass
+                            return integration_state::k_backward_decelerating;
                         default:
                             throw std::logic_error{"Invalid event for k_forward_following_velocity_curve state"};
                     }
@@ -467,6 +476,9 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
         // Scratch buffer for backward integration points. Backward integration builds a trajectory
         // moving from switching point toward start. Points are accumulated here, then reversed and
         // spliced into the main trajectory when intersection with forward trajectory is found.
+        //
+        // TODO: Revisit how state is passed between integration states. Consider using stateful
+        // events that carry context, rather than state machine-scoped variables.
         std::vector<integration_point> backward_points;
 
         while (state != integration_state::k_done) {
@@ -518,7 +530,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         // Initialize backward integration with switching point as starting position
                         backward_points.push_back(switching_point);
 
-                        // Transition to backward integration state
                         event = integration_event::k_reached_end;
                         break;
                     }
@@ -555,7 +566,21 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         // Note: The phase_point passed to observer is the INFEASIBLE candidate point
                         // that exceeded limits, not a feasible point on the limit curve.
                         maybe_on_hit_limit_curve({.s = next_s, .s_dot = next_s_dot}, s_dot_max_acc, s_dot_max_vel);
-                        event = integration_event::k_hit_limit_curve;
+
+                        // Determine which limit curve we hit by comparing the two curves.
+                        // The lower curve is the active constraint at this position.
+                        //
+                        // TODO: When curves are within epsilon of each other, it's arbitrary whether we treat
+                        // this as hitting the velocity curve (and potentially following it) or the acceleration
+                        // curve (and searching for a switching point). Current choice: if curves are within
+                        // epsilon, treat as acceleration curve hit (search for switching point). This is
+                        // conservative in the sense that searching is always safe, while curve following
+                        // requires the curve to be well-defined. However, investigate whether there's a
+                        // better heuristic (e.g., based on curve derivatives or previous state).
+                        const bool hit_velocity_curve = ((s_dot_max_acc - s_dot_max_vel) > traj.options_.epsilon);
+
+                        // Fire appropriate event based on which curve was hit
+                        event = hit_velocity_curve ? integration_event::k_hit_velocity_curve : integration_event::k_hit_acceleration_curve;
                         break;
                     }
 
@@ -571,9 +596,139 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     break;
                 }
 
-                case integration_state::k_forward_following_velocity_curve:
-                    // TODO: Implement curve following (Algorithm Step 3)
-                    throw std::runtime_error{"Forward velocity curve following not yet implemented"};
+                case integration_state::k_forward_following_velocity_curve: {
+                    // Algorithm Step 3: Analyze velocity limit curve and decide whether to escape,
+                    // follow tangentially, or search for switching point.
+                    //
+                    // We know we're on a velocity curve (acceleration curves go directly to searching).
+                    // Check if we can escape back below the curve, must search for switching point,
+                    // or should follow the curve tangentially.
+
+                    // Starting point is the last feasible integration point
+                    const auto& current_point = traj.integration_points_.back();
+
+                    // Position cursor at current point to query geometry
+                    path_cursor.seek(current_point.s);
+                    const auto q_prime = path_cursor.tangent();
+                    const auto q_double_prime = path_cursor.curvature();
+
+                    // Compute the velocity limit at current position. We're following this curve,
+                    // so our trajectory velocity should be on or very close to this limit.
+                    const auto [s_dot_max_acc, s_dot_max_vel] = compute_velocity_limits(
+                        q_prime, q_double_prime, traj.options_.max_velocity, traj.options_.max_acceleration, traj.options_.epsilon);
+
+                    // Compute the slope of the velocity limit curve in phase plane (eq 37).
+                    // This is d/ds s_dot_max_vel(s), telling us how the velocity limit changes along the path.
+                    const double curve_slope =
+                        compute_velocity_limit_derivative(q_prime, q_double_prime, traj.options_.max_velocity, traj.options_.epsilon);
+
+                    // Compute feasible acceleration bounds at the velocity limit per paper Algorithm Step 3.
+                    // The paper specifies evaluating s_ddot_min/max at s_dot_max_vel(s), not at current trajectory velocity.
+                    const auto [s_ddot_min, s_ddot_max] = compute_acceleration_bounds(
+                        q_prime, q_double_prime, s_dot_max_vel, traj.options_.max_acceleration, traj.options_.epsilon);
+
+                    // TODO: Investigate whether we want a richer exception type for algorithm failures.
+                    // A custom exception hierarchy could distinguish between different failure modes
+                    // (infeasible path, numerical issues, constraint violations) for better error handling.
+                    if (s_ddot_min > s_ddot_max) [[unlikely]] {
+                        throw std::runtime_error{"TOTG algorithm error: acceleration bounds are infeasible during curve following"};
+                    }
+
+                    // Check exit conditions by comparing acceleration bounds with curve slope.
+                    // The ratio s_ddot / s_dot gives the slope of a trajectory in phase plane:
+                    // ds_dot/ds = (ds_dot/dt)/(ds/dt) = s_ddot/s_dot (from chain rule in phase plane).
+                    // We compare this with the limit curve's slope to determine if we can escape or must search.
+                    //
+                    // Three cases (from paper Section VI, step 3):
+                    // 1. s_ddot_max / s_dot < curve_slope - epsilon: Can escape (trajectory curves below limit)
+                    // 2. s_ddot_min / s_dot > curve_slope + epsilon: Must search (trapped on curve)
+                    // 3. Otherwise: Follow curve tangentially
+                    //
+                    // Note: We use s_dot_max_vel in the slope calculations per Algorithm Step 3.
+
+                    // TODO: Revisit whether we need epsilon checks before dividing by s_dot_max_vel here. During forward
+                    // integration following the velocity curve, s_dot_max_vel should always be positive. However, if the
+                    // velocity limit itself becomes very small (e.g., tight curvature with low velocity limits), the division
+                    // could become numerically unstable. For now, throw if s_dot_max_vel is near zero as a canary.
+                    if (s_dot_max_vel < traj.options_.epsilon) [[unlikely]] {
+                        throw std::runtime_error{
+                            "TOTG algorithm error: cannot evaluate curve exit conditions with near-zero velocity limit"};
+                    }
+
+                    if ((curve_slope - (s_ddot_max / s_dot_max_vel)) > traj.options_.epsilon) {
+                        // Maximum acceleration trajectory curves away from the limit curve (less steeply upward).
+                        // The trajectory's slope (s_ddot_max / s_dot) is less than the limit curve's slope,
+                        // meaning we're moving upward more slowly than the curve, effectively dropping below it.
+                        // We can escape the curve and resume normal maximum acceleration integration.
+                        event = integration_event::k_escaped_limit_curve;
+                        break;
+                    }
+
+                    if (((s_ddot_min / s_dot_max_vel) - curve_slope) > traj.options_.epsilon) {
+                        // Even minimum acceleration trajectory curves upward into limit curve.
+                        // We're stuck on the curve and must search for a switching point.
+                        event = integration_event::k_hit_acceleration_curve;
+                        break;
+                    }
+
+                    // Neither escape nor search conditions met - follow the limit curve tangentially.
+                    // Compute the tangent acceleration: the rate of change that keeps us on the curve.
+                    const double s_ddot_curve = curve_slope * s_dot_max_vel;
+
+                    // Validate that tangent acceleration is within feasible bounds.
+                    // If the curve's tangent falls outside our acceleration capabilities, the trajectory
+                    // is infeasible at this point (algorithm error - shouldn't reach here).
+                    // TODO: Investigate whether we want a richer exception type for infeasible trajectories.
+                    // Could provide diagnostic information about which constraints failed and where.
+                    if (s_ddot_curve < s_ddot_min || s_ddot_curve > s_ddot_max) [[unlikely]] {
+                        throw std::runtime_error{
+                            "TOTG algorithm error: velocity curve tangent acceleration outside feasible bounds - "
+                            "trajectory is infeasible"};
+                    }
+
+                    // Integrate forward along the curve with tangent acceleration
+                    const auto [next_s, next_s_dot] =
+                        euler_step(current_point.s, current_point.s_dot, s_ddot_curve, traj.options_.delta.count());
+
+                    // TODO: Investigate whether "up and to the right" assertion is valid during curve following.
+                    // When following a velocity limit curve tangentially, s_ddot_curve = curve_slope * s_dot.
+                    // If curve_slope < 0 (velocity limit curve descending), then s_ddot_curve < 0, causing
+                    // s_dot to decrease over time. This would violate the assertion below. Questions:
+                    // 1. Can velocity limit curves have negative slope in feasible forward integration regions?
+                    // 2. If so, is it physically correct to follow a descending curve (s increasing, s_dot decreasing)?
+                    // 3. Does the reference implementation in old_integration.cpp handle this case?
+                    // For now, keeping the assertion as a canary to detect this case if it occurs in testing.
+                    //
+                    // Forward integration should move "up and to the right" in phase plane
+                    if ((next_s <= current_point.s) || (next_s_dot < current_point.s_dot)) [[unlikely]] {
+                        throw std::runtime_error{"TOTG algorithm error: curve following must increase both s and s_dot"};
+                    }
+
+                    // Check if we've reached the end of the path while following the curve
+                    if (next_s >= traj.path_.length()) {
+                        // Reached end while on velocity limit curve - this is a switching point at rest.
+                        // The forward trajectory hit the end with non-zero velocity (on the curve),
+                        // so we must perform backward integration to create a feasible deceleration.
+                        integration_point switching_point{
+                            .time = current_point.time + traj.options_.delta, .s = traj.path_.length(), .s_dot = 0.0, .s_ddot = 0.0};
+
+                        // Initialize backward integration with switching point as starting position
+                        backward_points.push_back(switching_point);
+
+                        event = integration_event::k_reached_end;
+                        break;
+                    }
+
+                    // Accept the point and continue following the curve.
+                    // The next iteration will re-evaluate whether we're still on the curve or can escape.
+                    integration_point next_point{
+                        .time = current_point.time + traj.options_.delta, .s = next_s, .s_dot = next_s_dot, .s_ddot = s_ddot_curve};
+                    traj.integration_points_.push_back(next_point);
+
+                    // No event - remain in same state and re-evaluate on next iteration
+                    // The loop will check exit conditions again with updated position
+                    break;
+                }
 
                 case integration_state::k_forward_searching_switching_point:
                     // TODO: Implement switching point search (Algorithm Step 4, Section VII)
@@ -719,13 +874,16 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             traj.integration_points_.push_back(corrected);
                         }
 
+                        // Update trajectory duration to reflect new endpoint before invoking callbacks.
+                        // Observers receiving the trajectory by reference may query its duration.
+                        traj.duration_ = traj.integration_points_.back().time;
+
                         // Clear backward scratch buffer for potential reuse if algorithm continues
                         backward_points.clear();
 
                         // Notify observer that trajectory has been extended with finalized backward segment
                         maybe_on_trajectory_extended();
 
-                        // Transition to forward acceleration to continue from new position
                         event = integration_event::k_hit_forward_trajectory;
                         break;
                     }
@@ -747,7 +905,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     break;
             }
 
-            // Transition to next state based on event
             if (event != integration_event::k_none) {
                 state = transition(state, event);
             }
