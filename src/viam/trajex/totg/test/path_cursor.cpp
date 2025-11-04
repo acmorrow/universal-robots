@@ -4,6 +4,12 @@
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 
+#if __has_include(<xtensor/reducers/xnorm.hpp>)
+#include <xtensor/reducers/xnorm.hpp>
+#else
+#include <xtensor/xnorm.hpp>
+#endif
+
 #include <boost/test/unit_test.hpp>
 
 BOOST_AUTO_TEST_SUITE(path_cursor_tests)
@@ -537,6 +543,330 @@ BOOST_AUTO_TEST_CASE(dereference_operator_returns_segment_view) {
     // Can use dereference result to query geometry
     auto config = view3.configuration(cursor.position());
     BOOST_CHECK_EQUAL(config.shape(0), 2U);
+}
+
+//
+// Test that cursor advances to next segment when positioned exactly at segment boundary.
+//
+// This validates the semantics required for acceleration switching point detection:
+// when we seek to a boundary, we should land in the segment that starts at that boundary,
+// not the segment that ends there.
+//
+BOOST_AUTO_TEST_CASE(cursor_at_boundary_advances_to_next_segment) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex;
+
+    // Create a simple path with three linear segments (no blends)
+    // to ensure we have well-defined boundaries between distinct segments
+    path::options opts;
+    opts.set_max_deviation(0.0);  // No blending - hard corners
+
+    xt::xarray<double> waypoints = {{0.0, 0.0},  // Start
+                                     {1.0, 0.0},  // First corner
+                                     {1.0, 1.0},  // Second corner
+                                     {2.0, 1.0}   // End
+    };
+
+    path p = path::create(waypoints, opts);
+
+    // Path should have 3 segments
+    BOOST_REQUIRE_EQUAL(p.size(), 3);
+
+    // Get segment boundaries by iterating
+    std::vector<arc_length> boundaries;
+    for (const auto& view : p) {
+        boundaries.push_back(view.start());
+        boundaries.push_back(view.end());
+    }
+
+    // Should have: segment0.start, segment0.end (=segment1.start), segment1.end (=segment2.start), segment2.end
+    BOOST_REQUIRE_GE(boundaries.size(), 4);
+
+    // Pick the boundary between segment 0 and segment 1
+    arc_length boundary_0_1 = boundaries[1];
+
+    // Position cursor at boundary
+    auto cursor = p.create_cursor(boundary_0_1);
+
+    // Cursor should be in segment 1 (the segment that starts at boundary), not segment 0
+    auto view_at_boundary = *cursor;
+
+    // Verify cursor is in the segment that starts at this boundary
+    BOOST_CHECK_EQUAL(view_at_boundary.start(), boundary_0_1);
+
+    // Verify this is not the segment that ends at this boundary (segment 0)
+    // by checking that the view doesn't extend backward from boundary
+    BOOST_CHECK_GE(cursor.position(), view_at_boundary.start());
+}
+
+//
+// Test that segment views accept queries at their start() point.
+//
+// This validates that we can query both segments adjacent to a boundary at the exact
+// boundary arc length: the segment ending at the boundary can be queried at its end(),
+// and the segment starting at the boundary can be queried at its start().
+//
+BOOST_AUTO_TEST_CASE(segment_view_accepts_query_at_start) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex;
+
+    path::options opts;
+    opts.set_max_deviation(0.0);
+
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+
+    path p = path::create(waypoints, opts);
+    BOOST_REQUIRE_GE(p.size(), 2);
+
+    // Get first segment
+    auto it = p.begin();
+    auto segment0 = *it;
+
+    // Should be able to query at start
+    arc_length start = segment0.start();
+    BOOST_CHECK_NO_THROW(segment0.configuration(start));
+    BOOST_CHECK_NO_THROW(segment0.tangent(start));
+    BOOST_CHECK_NO_THROW(segment0.curvature(start));
+}
+
+//
+// Test that segment views accept queries at their end() point.
+//
+// The segment boundary semantics are [start, end) for containment checks, but
+// end() should still be a valid query point for geometry (tangent, curvature)
+// to support sampling both sides of a discontinuity.
+//
+BOOST_AUTO_TEST_CASE(segment_view_accepts_query_at_end) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex;
+
+    path::options opts;
+    opts.set_max_deviation(0.0);
+
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+
+    path p = path::create(waypoints, opts);
+    BOOST_REQUIRE_GE(p.size(), 2);
+
+    // Get first segment
+    auto it = p.begin();
+    auto segment0 = *it;
+
+    // Should be able to query at end
+    arc_length end = segment0.end();
+    BOOST_CHECK_NO_THROW(segment0.configuration(end));
+    BOOST_CHECK_NO_THROW(segment0.tangent(end));
+    BOOST_CHECK_NO_THROW(segment0.curvature(end));
+}
+
+//
+// Test that both segments adjacent to a boundary return different geometry at the boundary.
+//
+// This is the key property for detecting discontinuities: if we query segment_before at
+// boundary and segment_after at boundary (same arc length, different segments), we should
+// get different tangent/curvature vectors, reflecting the geometric discontinuity.
+//
+BOOST_AUTO_TEST_CASE(adjacent_segments_differ_at_boundary) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex;
+
+    path::options opts;
+    opts.set_max_deviation(0.0);
+
+    // Create path with a sharp corner to ensure geometric discontinuity
+    xt::xarray<double> waypoints = {
+        {0.0, 0.0},  // Start - moving in +x direction
+        {1.0, 0.0},  // Corner - 90 degree turn
+        {1.0, 1.0}   // End - now moving in +y direction
+    };
+
+    path p = path::create(waypoints, opts);
+    BOOST_REQUIRE_EQUAL(p.size(), 2);
+
+    // Get the boundary between the two segments
+    auto it = p.begin();
+    auto segment_before = *it;
+    ++it;
+    auto segment_after = *it;
+
+    arc_length boundary = segment_before.end();
+    BOOST_CHECK_EQUAL(boundary, segment_after.start());  // Verify they meet
+
+    // Query geometry from both segments at the exact boundary point
+    auto tangent_before = segment_before.tangent(boundary);
+    auto tangent_after = segment_after.tangent(boundary);
+
+    // Tangents should differ at the corner (90 degree turn)
+    // segment_before points in +x direction: [1, 0]
+    // segment_after points in +y direction: [0, 1]
+    BOOST_CHECK_CLOSE(tangent_before(0), 1.0, 1e-6);
+    BOOST_CHECK_SMALL(tangent_before(1), 1e-6);
+
+    BOOST_CHECK_SMALL(tangent_after(0), 1e-6);
+    BOOST_CHECK_CLOSE(tangent_after(1), 1.0, 1e-6);
+
+    // Verify they're actually different (dot product should be ~0 for perpendicular)
+    double dot_product = xt::sum(tangent_before * tangent_after)();
+    BOOST_CHECK_SMALL(dot_product, 1e-6);
+}
+
+//
+// Test cursor behavior with seek operations around boundaries.
+//
+// Validates that:
+// 1. Seeking slightly before boundary keeps cursor in segment ending at boundary
+// 2. Seeking exactly to boundary advances cursor to segment starting at boundary
+// 3. Seeking slightly after boundary places cursor in segment starting at boundary
+//
+BOOST_AUTO_TEST_CASE(cursor_seek_behavior_around_boundary) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex;
+
+    path::options opts;
+    opts.set_max_deviation(0.0);
+
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+
+    path p = path::create(waypoints, opts);
+    BOOST_REQUIRE_EQUAL(p.size(), 2);
+
+    // Find boundary between segments
+    auto it = p.begin();
+    auto segment0 = *it;
+    ++it;
+    auto segment1 = *it;
+
+    arc_length boundary = segment0.end();
+    BOOST_CHECK_EQUAL(boundary, segment1.start());
+
+    constexpr double small_offset = 1e-10;
+
+    // Test: slightly before boundary should be in segment 0
+    {
+        auto cursor = p.create_cursor(boundary - arc_length{small_offset});
+        auto view = *cursor;
+        BOOST_CHECK_EQUAL(view.start(), segment0.start());
+        BOOST_CHECK_EQUAL(view.end(), segment0.end());
+    }
+
+    // Test: exactly at boundary should be in segment 1
+    {
+        auto cursor = p.create_cursor(boundary);
+        auto view = *cursor;
+        BOOST_CHECK_EQUAL(view.start(), segment1.start());
+        BOOST_CHECK_EQUAL(view.end(), segment1.end());
+    }
+
+    // Test: slightly after boundary should be in segment 1
+    {
+        auto cursor = p.create_cursor(boundary + arc_length{small_offset});
+        auto view = *cursor;
+        BOOST_CHECK_EQUAL(view.start(), segment1.start());
+        BOOST_CHECK_EQUAL(view.end(), segment1.end());
+    }
+}
+
+//
+// Test that we can safely sample geometry on both sides of a boundary using cursor.
+//
+// This test validates the complete workflow needed for switching point detection:
+// 1. Position cursor somewhere in segment N
+// 2. Get segment view and find its end (the boundary)
+// 3. Query that view at the boundary (segment N's perspective)
+// 4. Seek cursor to boundary (advances to segment N+1)
+// 5. Get new segment view
+// 6. Query new view at boundary (segment N+1's perspective)
+// 7. Verify we got different geometry (discontinuity detected)
+//
+BOOST_AUTO_TEST_CASE(safe_boundary_sampling_workflow) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex;
+
+    path::options opts;
+    opts.set_max_deviation(0.0);
+
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+
+    path p = path::create(waypoints, opts);
+
+    // Start cursor in first segment
+    auto cursor = p.create_cursor(arc_length{0.5});
+
+    // Get current segment view
+    auto segment_before = *cursor;
+    arc_length boundary = segment_before.end();
+
+    // Sample geometry from segment ending at boundary
+    auto tangent_before = segment_before.tangent(boundary);
+    auto curvature_before = segment_before.curvature(boundary);
+
+    // Advance cursor to boundary (should move to next segment)
+    cursor.seek(boundary);
+    auto segment_after = *cursor;
+
+    // Verify cursor advanced to next segment
+    BOOST_CHECK_EQUAL(segment_after.start(), boundary);
+    BOOST_CHECK_NE(segment_after.start(), segment_before.start());
+
+    // Sample geometry from segment starting at boundary
+    auto tangent_after = segment_after.tangent(boundary);
+    auto curvature_after = segment_after.curvature(boundary);
+
+    // Verify we got different geometry (detecting the discontinuity)
+    double tangent_diff = xt::norm_l2(tangent_before - tangent_after)();
+    BOOST_CHECK_GT(tangent_diff, 0.1);  // Should differ significantly at 90 degree corner
+}
+
+//
+// Test with circular blend segment to ensure boundary behavior works with both segment types.
+//
+BOOST_AUTO_TEST_CASE(cursor_boundary_behavior_with_circular_blends) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex;
+
+    path::options opts;
+    opts.set_max_deviation(0.1);  // Enable blending
+
+    // Create path that will have blend
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+
+    path p = path::create(waypoints, opts);
+
+    // With blending enabled, should have 3 segments: linear, circular, linear
+    BOOST_REQUIRE_EQUAL(p.size(), 3);
+
+    auto it = p.begin();
+    auto segment0 = *it;  // Linear
+    ++it;
+    auto segment1 = *it;  // Circular blend
+    ++it;
+    auto segment2 = *it;  // Linear
+
+    // Test boundary between linear and circular
+    {
+        arc_length boundary = segment0.end();
+        BOOST_CHECK_EQUAL(boundary, segment1.start());
+
+        auto cursor = p.create_cursor(boundary);
+        auto view = *cursor;
+
+        // Should be in circular segment
+        BOOST_CHECK(view.is<path::segment::circular>());
+        BOOST_CHECK_EQUAL(view.start(), boundary);
+    }
+
+    // Test boundary between circular and linear
+    {
+        arc_length boundary = segment1.end();
+        BOOST_CHECK_EQUAL(boundary, segment2.start());
+
+        auto cursor = p.create_cursor(boundary);
+        auto view = *cursor;
+
+        // Should be in second linear segment
+        BOOST_CHECK(view.is<path::segment::linear>());
+        BOOST_CHECK_EQUAL(view.start(), boundary);
+    }
 }
 
 
