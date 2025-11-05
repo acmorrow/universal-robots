@@ -254,8 +254,8 @@ enum class integration_event : std::uint8_t {
 // Returns the first valid switching point found, or nullopt if none exists before path end.
 //
 // Takes path::cursor by value (cheap copy) to seed forward search from current position.
-[[gnu::pure]] std::optional<trajectory::phase_point> find_acceleration_switching_point(path::cursor cursor,
-                                                                                       const trajectory::options& opt) {
+[[gnu::pure]] trajectory::phase_point find_acceleration_switching_point(path::cursor cursor,
+                                                                                const trajectory::options& opt) {
     // Walk forward through segments, checking interior extrema first, then boundaries
     while (true) {
         auto current_segment = *cursor;
@@ -425,22 +425,27 @@ enum class integration_event : std::uint8_t {
         const bool touches_mvc = (std::abs(s_dot_switching - s_dot_max_acc_before) < opt.epsilon) ||
                                  (std::abs(s_dot_switching - s_dot_max_acc_after) < opt.epsilon);
 
+        // TODO: Equation 38: Validate that this discontinuity is a trajectory SINK.
+        // A discontinuity is a valid switching point only if the maximum acceleration trajectory
+        // flows into it (is a sink), not away from it (source). We check this by comparing
+        // the trajectory slope (s_ddot_max/s_dot) with the limit curve slope (d/ds s_dot_max_acc).
+
         if (can_reach_from_left && can_continue_on_right && touches_mvc) {
             return trajectory::phase_point{.s = boundary, .s_dot = s_dot_switching};
         }
     }
 
-    // No valid switching point found before path end
-    return std::nullopt;
+    // No valid switching point found before path end - return end of path as switching point
+    return trajectory::phase_point{.s = cursor.path().length(), .s_dot = 0.0};
 }
 
 // Searches for a velocity switching point where escape from velocity curve becomes possible.
 // When trapped on the velocity limit curve, we search forward to find where the trajectory
 // can drop below the curve (equation 40). Uses coarse search followed by bisection refinement.
 // See Kunz & Stilman Section VII-B, equations 40-42.
-// Returns the switching point on velocity curve, or nullopt if no escape before path end.
+// Returns the switching point on velocity curve. If no escape point found, returns end of path.
 // Takes path::cursor by value (cheap copy) to seed forward search from current position.
-[[gnu::pure]] std::optional<trajectory::phase_point> find_velocity_switching_point(path::cursor cursor, const trajectory::options& opt) {
+[[gnu::pure]] trajectory::phase_point find_velocity_switching_point(path::cursor cursor, const trajectory::options& opt) {
     const arc_length path_length = cursor.path().length();
     const double step_size = opt.delta.count();
 
@@ -492,9 +497,9 @@ enum class integration_event : std::uint8_t {
         previous_position = cursor.position();
     }
 
-    // If no escape region found, return nullopt (caller will use path end as fallback)
+    // If no escape region found, return end of path as switching point
     if (!escape_region_start.has_value()) {
-        return std::nullopt;
+        return trajectory::phase_point{.s = cursor.path().length(), .s_dot = 0.0};
     }
 
     // Phase 2: Bisection refinement to find exact switching point.
@@ -550,6 +555,41 @@ enum class integration_event : std::uint8_t {
         compute_velocity_limits(q_prime, q_double_prime, opt.max_velocity, opt.max_acceleration, opt.epsilon);
 
     return trajectory::phase_point{.s = after, .s_dot = s_dot_max_vel};
+}
+
+// Unified switching point search that calls both acceleration and velocity searches.
+// Per the reference implementation and paper, we must search for BOTH types of switching points
+// and return whichever comes first along the path. The curves can cross, so even if we hit the
+// acceleration curve, the velocity switching point might come before the acceleration switching point.
+//
+// When both switching points are at the same location (within epsilon), we return whichever has
+// lower velocity, as this is more conservative and less likely to cause immediate limit curve hit
+// during backward integration.
+//
+// TODO: Performance optimization - bound velocity search by acceleration result.
+// The reference implementation (Trajectory.cpp:129-133) demonstrates that after finding the
+// acceleration switching point, we can bound the velocity search to stop at that position.
+// This can reduce velocity search cost by 10-100x when there's an acceleration switching point nearby.
+// For now, we call both independently, but we should pass acceleration result to velocity search.
+//
+// Takes path::cursor by value (cheap copy) to seed forward search from current position.
+[[gnu::pure]] trajectory::phase_point find_switching_point(path::cursor cursor, const trajectory::options& opt) {
+    // Always search for both types of switching points
+    auto accel_sp = find_acceleration_switching_point(cursor, opt);
+    auto vel_sp = find_velocity_switching_point(cursor, opt);
+
+    // Determine if switching points are at distinct locations
+    const auto s_difference = std::abs(static_cast<double>(accel_sp.s - vel_sp.s));
+    const bool at_same_location = (s_difference < opt.epsilon);
+
+    if (at_same_location) {
+        // Both switching points at same location (within epsilon)
+        // Use whichever has lower velocity (more conservative)
+        return (accel_sp.s_dot < vel_sp.s_dot) ? accel_sp : vel_sp;
+    }
+
+    // Return whichever comes first along the path
+    return (accel_sp.s < vel_sp.s) ? accel_sp : vel_sp;
 }
 
 }  // namespace
@@ -865,20 +905,15 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             break;
                         }
 
-                        // Acceleration curve hit. Search forward along the path for a switching point where
-                        // backward integration can begin. This happens when path curvature changes sharply at
-                        // segment boundaries, creating discontinuities in the acceleration limit curve.
-                        auto switching_point = find_acceleration_switching_point(path_cursor, traj.options_);
-
-                        if (!switching_point.has_value()) {
-                            // No switching point found before path end - use end as switching point
-                            switching_point = phase_point{.s = traj.path_.length(), .s_dot = 0.0};
-                        }
+                        // Hit limit curve. Search forward along the path for a switching point where
+                        // backward integration can begin. The unified search checks for both acceleration
+                        // discontinuities and velocity escape points, returning whichever comes first.
+                        auto switching_point = find_switching_point(path_cursor, traj.options_);
 
                         // Initialize backward integration from switching point
                         integration_point sp{.time = current_point.time + traj.options_.delta,  // Placeholder, corrected during splice
-                                             .s = switching_point->s,
-                                             .s_dot = switching_point->s_dot,
+                                             .s = switching_point.s,
+                                             .s_dot = switching_point.s_dot,
                                              .s_ddot = 0.0};
                         backward_points.push_back(sp);
 
@@ -968,20 +1003,16 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     }
 
                     if (((s_ddot_min / s_dot_max_vel) - curve_slope) > traj.options_.epsilon) {
-                        // Trapped on velocity limit curve with no way to escape via normal acceleration.
-                        // Search forward for a point where the acceleration limit curve rises high enough that we can drop below
-                        // the velocity curve. If found, that becomes a switching point for backward integration.
-                        auto switching_point = find_velocity_switching_point(path_cursor, traj.options_);
-
-                        if (!switching_point.has_value()) {
-                            // No escape point found before path end - use end as switching point
-                            switching_point = phase_point{.s = traj.path_.length(), .s_dot = 0.0};
-                        }
+                        // Trapped on limit curve with no way to escape via normal acceleration.
+                        // Search forward for a switching point where backward integration can begin.
+                        // The unified search checks for both acceleration discontinuities and velocity
+                        // escape points, returning whichever comes first.
+                        auto switching_point = find_switching_point(path_cursor, traj.options_);
 
                         // Initialize backward integration from switching point
                         integration_point sp{.time = current_point.time + traj.options_.delta,  // Placeholder, corrected during splice
-                                             .s = switching_point->s,
-                                             .s_dot = switching_point->s_dot,
+                                             .s = switching_point.s,
+                                             .s_dot = switching_point.s_dot,
                                              .s_ddot = 0.0};
                         backward_points.push_back(sp);
 
@@ -1133,11 +1164,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         throw std::runtime_error{"TOTG algorithm error: velocity limit curve is non-positive during backward integration"};
                     }
 
-                    // Candidate hitting limit curve is an algorithm error - trajectory is infeasible
-                    if ((s_dot_limit - candidate_s_dot) < traj.options_.epsilon) [[unlikely]] {
-                        throw std::runtime_error{"TOTG algorithm error: backward integration hit limit curve - trajectory is infeasible"};
-                    }
-
                     // Check exit condition 2: Does candidate intersect forward trajectory in phase plane?
                     // Intersection means backward's s_dot has dropped below forward's s_dot at same s position.
                     //
@@ -1145,6 +1171,10 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // forward point. While integrating backward from switching point, we start far from the
                     // forward trajectory and gradually approach it. Early exit eliminates expensive binary
                     // search until we're actually in range to intersect.
+                    //
+                    // NOTE: We do this check before checking to see if we have hit the velocity limit curve, since
+                    // we may be trying to intersect a forward trajectory that was following the curve. If we check
+                    // against the limit curve first, we might error out when we should have intersected.
                     std::optional<size_t> intersection_index;
                     if (candidate_s <= traj.integration_points_.back().s) {
                         intersection_index = find_trajectory_intersection(candidate_s, candidate_s_dot);
@@ -1198,6 +1228,11 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
 
                         event = integration_event::k_hit_forward_trajectory;
                         break;
+                    }
+
+                    // Candidate hitting limit curve is an algorithm error - trajectory is infeasible
+                    if ((s_dot_limit - candidate_s_dot) < traj.options_.epsilon) [[unlikely]] {
+                        throw std::runtime_error{"TOTG algorithm error: backward integration hit limit curve - trajectory is infeasible"};
                     }
 
                     // Candidate point is feasible - accept it and continue backward integration
