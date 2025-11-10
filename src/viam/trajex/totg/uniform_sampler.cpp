@@ -59,7 +59,7 @@ std::optional<struct trajectory::sample> uniform_sampler::next(trajectory::curso
         cursor.seek(next);
     }
 
-    return std::move(sample);
+    return sample;
 }
 
 }  // namespace viam::trajex::totg
