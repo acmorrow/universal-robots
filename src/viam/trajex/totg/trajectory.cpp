@@ -553,6 +553,12 @@ enum class integration_event : std::uint8_t {
     const auto [s_dot_max_acc, s_dot_max_vel] =
         compute_velocity_limits(q_prime, q_double_prime, opt.max_velocity, opt.max_acceleration, opt.epsilon);
 
+    // TODO: Implement Addendum E validation - reject switching points where s_dot_max_vel > s_dot_max_acc.
+    // Per the reference implementation (Trajectory.cpp:129-133), if the velocity switching point has
+    // s_dot > s_dot_max_acc, backward integration will immediately hit the acceleration limit curve,
+    // causing the algorithm to fail. We should continue searching forward until finding a switching
+    // point where s_dot_max_vel <= s_dot_max_acc + epsilon.
+
     return trajectory::phase_point{.s = after, .s_dot = s_dot_max_vel};
 }
 
@@ -1229,9 +1235,11 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         break;
                     }
 
-                    // Candidate hitting limit curve is an algorithm error - trajectory is infeasible
-                    if ((s_dot_limit - candidate_s_dot) < traj.options_.epsilon) [[unlikely]] {
-                        throw std::runtime_error{"TOTG algorithm error: backward integration hit limit curve - trajectory is infeasible"};
+                    // Candidate exceeding limit curve is an algorithm error - trajectory is infeasible.
+                    // Note: Being AT the limit (within epsilon) is allowed - only EXCEEDING it is rejected.
+                    if ((candidate_s_dot - s_dot_limit) > traj.options_.epsilon) [[unlikely]] {
+                        throw std::runtime_error{
+                            "TOTG algorithm error: backward integration exceeded limit curve - trajectory is infeasible"};
                     }
 
                     // Candidate point is feasible - accept it and continue backward integration
