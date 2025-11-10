@@ -22,7 +22,7 @@ function(apply_wall_werror target_name)
 
   set(GNULIKE_COMPILERS "Clang" "AppleClang" "GNU")
   if (CMAKE_CXX_COMPILER_ID IN_LIST GNULIKE_COMPILERS)
-    target_compile_options(${target_name} PUBLIC
+    target_compile_options(${target_name} PRIVATE
       -Wall
       -Werror
       -Wextra
@@ -252,6 +252,7 @@ target_compile_definitions(viam-ur
 target_link_libraries(viam-ur
   PUBLIC
     trajectories
+    trajex
     urcl
     viam-cpp-sdk::viamsdk
 )

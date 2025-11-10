@@ -31,6 +31,10 @@
 
 #include <third_party/trajectories/Trajectory.h>
 
+#include <viam/trajex/totg/totg.hpp>
+#include <viam/trajex/totg/uniform_sampler.hpp>
+#include <viam/trajex/types/hertz.hpp>
+
 #include "ur_arm_state.hpp"
 #include "utils.hpp"
 
@@ -48,6 +52,29 @@ namespace {
 
 constexpr double k_waypoint_equivalancy_epsilon_rad = 1e-4;
 constexpr double k_min_timestep_sec = 1e-2;  // determined experimentally, the arm appears to error when given timesteps ~2e-5 and lower
+constexpr double k_sampling_freq_hz = 5;
+
+// Convert Eigen waypoint list to xt::xarray for trajex/totg
+xt::xarray<double> eigen_waypoints_to_xarray(const std::list<Eigen::VectorXd>& waypoints) {
+    if (waypoints.empty()) {
+        return xt::xarray<double>::from_shape({0, 0});
+    }
+
+    const size_t num_waypoints = waypoints.size();
+    const size_t dof = static_cast<size_t>(waypoints.front().size());
+
+    xt::xarray<double> result = xt::zeros<double>({num_waypoints, dof});
+
+    size_t i = 0;
+    for (const auto& waypoint : waypoints) {
+        for (size_t j = 0; j < dof; ++j) {
+            result(i, j) = waypoint[static_cast<Eigen::Index>(j)];
+        }
+        ++i;
+    }
+
+    return result;
+}
 
 pose ur_vector_to_pose(urcl::vector6d_t vec) {
     const double norm = std::hypot(vec[3], vec[4], vec[5]);
@@ -540,6 +567,60 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
         return;
     }
 
+    const auto new_trajectory = [&]() -> std::optional<std::vector<trajectory_sample_point>> {
+        if (!current_state_->use_new_trajectory_planner()) {
+            return std::nullopt;
+        }
+
+        try {
+            using namespace viam::trajex;
+
+            const auto waypoints_xarray = eigen_waypoints_to_xarray(waypoints);
+            const auto generation_start = std::chrono::steady_clock::now();
+            totg::waypoint_accumulator trajex_waypoints(waypoints_xarray);
+            auto trajex_path = totg::path::create(trajex_waypoints);
+
+            totg::trajectory::options trajex_opts;
+            trajex_opts.max_velocity = xt::xarray<double>::from_shape({6});
+            trajex_opts.max_acceleration = xt::xarray<double>::from_shape({6});
+            for (size_t i = 0; i < 6; ++i) {
+                trajex_opts.max_velocity(i) = current_state_->get_speed();
+                trajex_opts.max_acceleration(i) = current_state_->get_acceleration();
+            }
+
+            auto trajex_trajectory = totg::trajectory::create(std::move(trajex_path), std::move(trajex_opts));
+
+            auto sampler = totg::uniform_sampler::quantized_for_trajectory(trajex_trajectory, types::hertz{k_sampling_freq_hz});
+
+            std::vector<trajectory_sample_point> trajex_samples;
+            double previous_time = 0.0;
+            for (const auto& sample : trajex_trajectory.samples(sampler)) {
+                const double current_time = sample.time.count();
+                const float timestep = boost::numeric_cast<float>(current_time - previous_time);
+
+                trajectory_sample_point point;
+                for (size_t i = 0; i < 6; ++i) {
+                    point.p[i] = sample.configuration(i);
+                    point.v[i] = sample.velocity(i);
+                }
+                point.timestep = timestep;
+
+                trajex_samples.push_back(point);
+                previous_time = current_time;
+            }
+            const auto generation_end = std::chrono::steady_clock::now();
+            const auto generation_time = std::chrono::duration<double>(generation_end - generation_start).count();
+
+            VIAM_SDK_LOG(info) << "trajex/totg trajectory generated successfully, duration: " << trajex_trajectory.duration().count()
+                               << "s, samples: " << trajex_samples.size() << ", generation_time: " << generation_time << "s";
+
+            return trajex_samples;
+        } catch (const std::exception& e) {
+            VIAM_SDK_LOG(warn) << "trajex/totg trajectory generation failed: " << e.what();
+            return std::nullopt;
+        }
+    }();
+
     // Walk all interior points of the waypoints list, if any. If the
     // point of current interest is the cusp of a direction reversal
     // w.r.t. the points immediately before and after it, then splice
@@ -557,6 +638,7 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
     // NOTE: This assumes waypoints have been de-duplicated to avoid
     // zero-length segments that would cause numerical issues in
     // normalized() calculations.
+    const auto legacy_generation_start = std::chrono::steady_clock::now();
     std::vector<decltype(waypoints)> segments;
     for (auto where = next(begin(waypoints)); where != prev(end(waypoints)); ++where) {
         const auto segment_ab = *where - *prev(where);
@@ -576,6 +658,7 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
     VIAM_SDK_LOG(debug) << "generating trajectory with max speed: " << radians_to_degrees(max_velocity[0]);
 
     std::vector<trajectory_sample_point> samples;
+    double total_duration = 0.0;
 
     for (const auto& segment : segments) {
         const Trajectory trajectory(Path(segment, 0.1), max_velocity, max_acceleration);
@@ -609,10 +692,9 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
             return;
         }
 
+        total_duration += duration;
         trajectory.outputPhasePlaneTrajectory();
 
-        // desired sampling frequency. if the duration is small we will oversample but that should be fine.
-        constexpr double k_sampling_freq_hz = 5;
         sampling_func(samples, duration, k_sampling_freq_hz, [&](const double t, const double step) {
             auto p_eigen = trajectory.getPosition(t);
             auto v_eigen = trajectory.getVelocity(t);
@@ -620,6 +702,13 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
                                            {v_eigen[0], v_eigen[1], v_eigen[2], v_eigen[3], v_eigen[4], v_eigen[5]},
                                            boost::numeric_cast<float>(step)};
         });
+    }
+    const auto legacy_generation_end = std::chrono::steady_clock::now();
+    const auto legacy_generation_time = std::chrono::duration<double>(legacy_generation_end - legacy_generation_start).count();
+
+    if (current_state_->use_new_trajectory_planner()) {
+        VIAM_SDK_LOG(info) << "legacy trajectory generated successfully, duration: " << total_duration << "s, samples: " << samples.size()
+                           << ", generation_time: " << legacy_generation_time << "s";
     }
     VIAM_SDK_LOG(debug) << "move: compute_trajectory end " << unix_time << " samples.size() " << samples.size() << " segments "
                         << segments.size() - 1;
