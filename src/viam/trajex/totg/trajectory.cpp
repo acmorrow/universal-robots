@@ -671,7 +671,6 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
         // Constructor initializes trajectory with initial point at rest (0, 0)
         trajectory traj{std::move(p), std::move(opt)};
 
-
         // Helper to detect intersection between backward trajectory and forward trajectory in phase plane.
         // Returns index in forward trajectory where intersection occurs, or nullopt if no intersection.
         // Intersection means backward point's s_dot exceeds forward trajectory's interpolated s_dot at same s.
