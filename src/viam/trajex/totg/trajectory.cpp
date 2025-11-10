@@ -1400,11 +1400,13 @@ void trajectory::cursor::update_path_cursor_position_(seconds t) {
     const double dt = (t - p0.time).count();
     const double s_interp = static_cast<double>(p0.s) + (p0.s_dot * dt) + (0.5 * p0.s_ddot * dt * dt);
 
-    // By construction, s_interp cannot exceed path.length() when t <= duration
-    assert(s_interp <= static_cast<double>(traj_->path_.length()));
+    // Clamp interpolated arc length to path bounds to handle floating point accumulation.
+    // Even when t <= duration, s_interp can slightly exceed path.length() due to numerical
+    // error in the kinematic integration, which would put the path cursor at sentinel.
+    const double s_clamped = std::min(s_interp, static_cast<double>(traj_->path_.length()));
 
-    // Position path cursor at interpolated arc length
-    path_cursor_.seek(arc_length{s_interp});
+    // Position path cursor at clamped arc length
+    path_cursor_.seek(arc_length{s_clamped});
 }
 
 trajectory::cursor& trajectory::cursor::seek(seconds t) {
