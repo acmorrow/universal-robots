@@ -1098,7 +1098,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         }
 
                         if (traj.options_.observer) {
-                            traj.options_.observer->on_started_backward_integration({.s = switching_point.s, .s_dot = switching_point.s_dot});
+                            traj.options_.observer->on_started_backward_integration(
+                                {.s = switching_point.s, .s_dot = switching_point.s_dot});
                         }
                     }
 
