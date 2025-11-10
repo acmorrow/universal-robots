@@ -71,12 +71,12 @@ BOOST_AUTO_TEST_CASE(iterator_interface) {
     // ADL calls (unqualified)
     using std::begin;
     using std::end;
-    BOOST_CHECK_NO_THROW(begin(acc));
-    BOOST_CHECK_NO_THROW(end(acc));
+    BOOST_CHECK_NO_THROW(static_cast<void>(begin(acc)));
+    BOOST_CHECK_NO_THROW(static_cast<void>(end(acc)));
 
     // std::cbegin/cend (qualified)
-    BOOST_CHECK_NO_THROW(std::cbegin(acc));
-    BOOST_CHECK_NO_THROW(std::cend(acc));
+    BOOST_CHECK_NO_THROW(static_cast<void>(std::cbegin(acc)));
+    BOOST_CHECK_NO_THROW(static_cast<void>(std::cend(acc)));
 
     // Verify range-based for works
     int count = 0;
