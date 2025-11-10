@@ -254,8 +254,7 @@ enum class integration_event : std::uint8_t {
 // Returns the first valid switching point found, or nullopt if none exists before path end.
 //
 // Takes path::cursor by value (cheap copy) to seed forward search from current position.
-[[gnu::pure]] trajectory::phase_point find_acceleration_switching_point(path::cursor cursor,
-                                                                                const trajectory::options& opt) {
+[[gnu::pure]] trajectory::phase_point find_acceleration_switching_point(path::cursor cursor, const trajectory::options& opt) {
     // Walk forward through segments, checking interior extrema first, then boundaries
     while (true) {
         auto current_segment = *cursor;
