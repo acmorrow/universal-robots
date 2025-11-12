@@ -192,9 +192,6 @@ BOOST_AUTO_TEST_CASE(ur_arm_incremental_waypoints_with_reversals) {
     opts.max_velocity = xt::ones<double>({6}) * (50 * deg_to_rad);         // 50 deg/s = 0.873 rad/s
     opts.max_acceleration = xt::ones<double>({6}) * (100.0 * deg_to_rad);  // 100 deg/s^2 = 1.745 rad/s^2
 
-    // EXPERIMENT 1: Test with smaller timestep (10x smaller than default 1ms)
-    opts.delta = trajectory::seconds{0.0001};  // 0.1ms timestep
-
     // Observer to log integration events
     struct test_observer : trajectory::integration_observer {
         void on_started_forward_integration(trajectory::phase_point pt) override {
@@ -221,7 +218,7 @@ BOOST_AUTO_TEST_CASE(ur_arm_incremental_waypoints_with_reversals) {
             // Create path with blending to make it differentiable at waypoints
             // Max deviation of 0.1 radians allows circular blends around sharp corners
             path::options path_opts;
-            path_opts.set_max_blend_deviation(0.1);
+            path_opts.set_max_deviation(0.1);
             path p = path::create(subset, path_opts);
 
             std::cout << "\n=== Testing " << num_waypoints << " waypoints (path length=" << static_cast<double>(p.length()) << ") ===\n";

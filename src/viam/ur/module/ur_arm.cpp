@@ -576,9 +576,7 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
             using namespace viam::trajex;
 
             const auto waypoints_xarray = eigen_waypoints_to_xarray(waypoints);
-            const auto generation_start = std::chrono::steady_clock::now();
             totg::waypoint_accumulator trajex_waypoints(waypoints_xarray);
-            auto trajex_path = totg::path::create(trajex_waypoints);
 
             totg::trajectory::options trajex_opts;
             trajex_opts.max_velocity = xt::xarray<double>::from_shape({6});
@@ -588,6 +586,8 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
                 trajex_opts.max_acceleration(i) = current_state_->get_acceleration();
             }
 
+            const auto generation_start = std::chrono::steady_clock::now();
+            auto trajex_path = totg::path::create(trajex_waypoints, totg::path::options{}.set_max_blend_deviation(0.1));
             auto trajex_trajectory = totg::trajectory::create(std::move(trajex_path), std::move(trajex_opts));
 
             auto sampler = totg::uniform_sampler::quantized_for_trajectory(trajex_trajectory, types::hertz{k_sampling_freq_hz});
@@ -612,7 +612,8 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
             const auto generation_time = std::chrono::duration<double>(generation_end - generation_start).count();
 
             VIAM_SDK_LOG(info) << "trajex/totg trajectory generated successfully, duration: " << trajex_trajectory.duration().count()
-                               << "s, samples: " << trajex_samples.size() << ", generation_time: " << generation_time << "s";
+                               << "s, samples: " << trajex_samples.size() << ", arc length: " << trajex_trajectory.path().length()
+                               << ", generation_time: " << generation_time << "s";
 
             return trajex_samples;
         } catch (const std::exception& e) {
@@ -659,9 +660,12 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
 
     std::vector<trajectory_sample_point> samples;
     double total_duration = 0.0;
+    double total_arc_length = 0.0;
 
     for (const auto& segment : segments) {
-        const Trajectory trajectory(Path(segment, 0.1), max_velocity, max_acceleration);
+        Path path(segment, 0.1);
+        total_arc_length += path.getLength();
+        const Trajectory trajectory(path, max_velocity, max_acceleration);
         if (!trajectory.isValid()) {
             std::stringstream buffer;
             buffer << "trajectory generation failed for path:";
@@ -708,7 +712,7 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
 
     if (current_state_->use_new_trajectory_planner()) {
         VIAM_SDK_LOG(info) << "legacy trajectory generated successfully, duration: " << total_duration << "s, samples: " << samples.size()
-                           << ", generation_time: " << legacy_generation_time << "s";
+                           << ", arc length: " << total_arc_length << ", generation_time: " << legacy_generation_time << "s";
     }
     VIAM_SDK_LOG(debug) << "move: compute_trajectory end " << unix_time << " samples.size() " << samples.size() << " segments "
                         << segments.size() - 1;
@@ -722,7 +726,8 @@ void URArm::move_(std::shared_lock<std::shared_mutex> config_rlock, std::list<Ei
               "joint_0_vel,joint_1_vel,joint_2_vel,joint_3_vel,joint_4_vel,joint_5_vel\n";
 
     auto trajectory_completion_future = [&, config_rlock = std::move(our_config_rlock), ajp_of = std::move(ajp_of)]() mutable {
-        return current_state_->enqueue_move_request(current_move_epoch, std::move(samples), std::move(ajp_of));
+        return current_state_->enqueue_move_request(
+            current_move_epoch, std::move(new_trajectory).value_or(std::move(samples)), std::move(ajp_of));
     }();
 
     // NOTE: The configuration read lock is no longer held after the above statement. Do not interact
