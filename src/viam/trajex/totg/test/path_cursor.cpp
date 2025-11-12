@@ -35,7 +35,10 @@ BOOST_AUTO_TEST_CASE(construct_with_minimal_path) {
     path p = path::create(waypoints);
 
     // Should be able to construct cursor with minimal path
-    BOOST_CHECK_NO_THROW({ auto c = p.create_cursor(); (void)c; });
+    BOOST_CHECK_NO_THROW({
+        auto c = p.create_cursor();
+        (void)c;
+    });
 }
 
 BOOST_AUTO_TEST_CASE(initial_position_at_start) {
@@ -448,10 +451,7 @@ BOOST_AUTO_TEST_CASE(large_jumps_across_many_segments) {
     using viam::trajex::arc_length;
 
     // Create path with many segments (12 segments: 6 linear + 6 circular blends)
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0},
-        {3.0, 1.0}, {3.0, 2.0}, {2.0, 2.0}, {1.0, 2.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0}, {3.0, 1.0}, {3.0, 2.0}, {2.0, 2.0}, {1.0, 2.0}};
     path::options opts;
     opts.set_max_blend_deviation(0.1);
     path p = path::create(waypoints, opts);
@@ -561,10 +561,11 @@ BOOST_AUTO_TEST_CASE(cursor_at_boundary_advances_to_next_segment) {
     path::options opts;
     opts.set_max_deviation(0.0);  // No blending - hard corners
 
-    xt::xarray<double> waypoints = {{0.0, 0.0},  // Start
-                                     {1.0, 0.0},  // First corner
-                                     {1.0, 1.0},  // Second corner
-                                     {2.0, 1.0}   // End
+    xt::xarray<double> waypoints = {
+        {0.0, 0.0},  // Start
+        {1.0, 0.0},  // First corner
+        {1.0, 1.0},  // Second corner
+        {2.0, 1.0}   // End
     };
 
     path p = path::create(waypoints, opts);
@@ -868,6 +869,5 @@ BOOST_AUTO_TEST_CASE(cursor_boundary_behavior_with_circular_blends) {
         BOOST_CHECK_EQUAL(view.start(), boundary);
     }
 }
-
 
 BOOST_AUTO_TEST_SUITE_END()

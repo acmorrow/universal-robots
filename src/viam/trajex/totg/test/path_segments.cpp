@@ -319,4 +319,3 @@ BOOST_AUTO_TEST_CASE(path_container_semantics) {
 }
 
 BOOST_AUTO_TEST_SUITE_END()
-

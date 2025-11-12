@@ -15,9 +15,11 @@
 namespace viam::trajex::totg::test {
 
 bool configs_close(const xt::xarray<double>& a, const xt::xarray<double>& b, double tolerance) {
-    if (a.shape(0) != b.shape(0)) return false;
+    if (a.shape(0) != b.shape(0))
+        return false;
     for (size_t i = 0; i < a.shape(0); ++i) {
-        if (std::abs(a(i) - b(i)) > tolerance) return false;
+        if (std::abs(a(i) - b(i)) > tolerance)
+            return false;
     }
     return true;
 }
