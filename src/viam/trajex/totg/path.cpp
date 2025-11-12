@@ -201,24 +201,32 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
         }
 
         const auto start_to_next = next - start;
-        const auto start_to_locus = locus - start;
 
-        const double start_to_next_sq = xt::sum(start_to_next * start_to_next)();
-
-        if (start_to_next_sq == 0.0) {
-            return true;  // Next is duplicate, so locus is trivially coalescable
+        // Check if start and next are exactly the same position (all components identically zero)
+        if (xt::all(xt::equal(start_to_next, 0.0))) {
+            // When start == next (returning to same position), the locus represents an
+            // intentional intermediate goal that must be preserved. Cannot coalesce.
+            return false;
         }
 
+        const auto start_to_locus = locus - start;
+        const double start_to_next_sq = xt::sum(start_to_next * start_to_next)();
         const double start_to_locus_dot_direction = xt::sum(start_to_locus * start_to_next)();
-        const double t = start_to_locus_dot_direction / start_to_next_sq;
 
         // Monotonic advancement check: reject if locus would require going backward from
         // start or forward past next. This ensures we only skip waypoints that maintain
         // forward progress along the segment direction.
-        if (t < 0.0 || t > 1.0) {
+        //
+        // We check the bounds BEFORE dividing to avoid division-by-near-zero issues.
+        // Since start_to_next_sq > 0, we can multiply through the inequality:
+        //   t < 0  becomes  dot < 0
+        //   t > 1  becomes  dot > start_to_next_sq
+        if (start_to_locus_dot_direction < 0.0 || start_to_locus_dot_direction > start_to_next_sq) {
             return false;
         }
 
+        // Now safe to divide: bounds check guarantees 0 <= t <= 1
+        const double t = start_to_locus_dot_direction / start_to_next_sq;
         const auto projected_point = start + (t * start_to_next);
         const auto deviation_vector = locus - projected_point;
         const double deviation = xt::norm_l2(deviation_vector)();
@@ -314,16 +322,45 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     // waypoints rather than one of the original waypoints in the accumulator.
     xt::xarray<double> current_position = *segment_start;
 
+    // Track waypoints we've skipped since the last segment emission. When extending the tube
+    // to a new endpoint, we must revalidate that all previously skipped waypoints remain
+    // within tolerance of the extended segment to prevent "tube drift".
+    std::vector<decltype(waypoints.begin())> skipped_since_anchor;
+
     for (auto locus = std::next(waypoints.begin()); locus != waypoints.end(); ++locus) {
         auto next = std::next(locus);
 
         // If we're at the last waypoint, we must emit the final segment
         const bool at_last = (next == waypoints.end());
 
-        const bool can_skip = !at_last && can_coalesce(*segment_start, *locus, *next);
+        // Check if we can skip this waypoint: it must pass the standard coalesce check
+        // AND all previously skipped waypoints must remain within tolerance when the
+        // tube is extended to the new endpoint (revalidation prevents drift).
+        if (!at_last && can_coalesce(*segment_start, *locus, *next)) {
+            // Revalidate all previously skipped waypoints against the extended segment
+            bool all_previous_valid = true;
+            for (auto prev_skipped : skipped_since_anchor) {
+                const auto start_to_next = *next - *segment_start;
+                const auto start_to_prev = *prev_skipped - *segment_start;
 
-        if (can_skip) {
-            continue;
+                const double start_to_next_sq = xt::sum(start_to_next * start_to_next)();
+                const double start_to_prev_dot = xt::sum(start_to_prev * start_to_next)();
+
+                const double t = start_to_prev_dot / start_to_next_sq;
+                const auto projected = *segment_start + (t * start_to_next);
+                const auto deviation_vec = *prev_skipped - projected;
+                const double deviation = xt::norm_l2(deviation_vec)();
+
+                if (deviation > opts.max_linear_deviation()) {
+                    all_previous_valid = false;
+                    break;
+                }
+            }
+
+            if (all_previous_valid) {
+                skipped_since_anchor.push_back(locus);
+                continue;
+            }
         }
 
         // Locus represents a corner (or the final waypoint). We need to emit the segment
@@ -356,6 +393,7 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
             // is between locus and next, we use locus as the reference point for determining if
             // future waypoints can be coalesced.
             segment_start = locus;
+            skipped_since_anchor.clear();
         } else {
             // No blend created - emit linear segment from current_position to locus
             const auto start_to_locus = *locus - current_position;
@@ -369,6 +407,7 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
 
             current_position = *locus;
             segment_start = locus;
+            skipped_since_anchor.clear();
         }
     }
 

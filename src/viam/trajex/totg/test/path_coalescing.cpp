@@ -41,11 +41,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_no_reduction) {
     using namespace viam::trajex::totg;
 
     // Waypoints where each is outside tolerance - no reduction should occur
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.5},  // Far from line (0,0) to (2,0): deviation = 0.5
-        {2.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 0.5},  // Far from line (0,0) to (2,0): deviation = 0.5
+                                    {2.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));  // Tolerance smaller than deviations
 
@@ -76,12 +74,10 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_with_reduction) {
     using namespace viam::trajex::totg;
 
     // Waypoints with some within tolerance, some outside
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.0},   // On the line from (0,0) to (3,0), within tolerance
-        {2.0, 0.05},  // Very close to line, within tolerance
-        {3.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 0.0},   // On the line from (0,0) to (3,0), within tolerance
+                                    {2.0, 0.05},  // Very close to line, within tolerance
+                                    {3.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));  // 0.1 unit tolerance
 
@@ -94,13 +90,7 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_all_within_tolerance) {
     using namespace viam::trajex::totg;
 
     // All intermediate waypoints within tolerance tube
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.05},
-        {2.0, -0.05},
-        {3.0, 0.03},
-        {4.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.05}, {2.0, -0.05}, {3.0, 0.03}, {4.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));  // All deviations < 0.1
 
@@ -113,11 +103,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_preserves_endpoints) {
     using namespace viam::trajex::totg;
 
     // Verify first and last waypoints always preserved
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {0.5, 0.0},  // All within tolerance
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {0.5, 0.0},  // All within tolerance
+                                    {1.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(1.0));  // Large tolerance
 
@@ -139,11 +127,7 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_zero_deviation_no_coalescing) {
     using namespace viam::trajex::totg;
 
     // With max_deviation = 0, no coalescing should occur
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.0},
-        {2.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}};
 
     path p = path::create(waypoints);
 
@@ -167,11 +151,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_three_waypoints) {
     using namespace viam::trajex::totg;
 
     // Minimal case for actual coalescing: 3 waypoints
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.01},  // Slightly off line
-        {2.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 0.01},  // Slightly off line
+                                    {2.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));  // Large enough tolerance
 
@@ -183,12 +165,10 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_duplicate_waypoints) {
     using namespace viam::trajex::totg;
 
     // Consecutive duplicate waypoints
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.0},
-        {1.0, 0.0},  // Duplicate
-        {2.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 0.0},
+                                    {1.0, 0.0},  // Duplicate
+                                    {2.0, 0.0}};
 
     // Should handle gracefully (duplicates should be coalesced away)
     BOOST_CHECK_NO_THROW(path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.01)));
@@ -198,13 +178,11 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_zigzag_pattern) {
     using namespace viam::trajex::totg;
 
     // Zigzag pattern: alternating above/below centerline
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.05},   // Above
-        {2.0, -0.05},  // Below
-        {3.0, 0.05},   // Above
-        {4.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 0.05},   // Above
+                                    {2.0, -0.05},  // Below
+                                    {3.0, 0.05},   // Above
+                                    {4.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));  // All deviations within tolerance
 
@@ -216,11 +194,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_higher_dimensions) {
     using namespace viam::trajex::totg;
 
     // Test in 6D (typical robot arm)
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-        {1.0, 0.01, 0.01, 0.01, 0.01, 0.01},  // Small deviation in all dims
-        {2.0, 0.0, 0.0, 0.0, 0.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+                                    {1.0, 0.01, 0.01, 0.01, 0.01, 0.01},  // Small deviation in all dims
+                                    {2.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));
 
@@ -232,11 +208,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_projection_beyond_segment) {
     using namespace viam::trajex::totg;
 
     // Current waypoint projects beyond the next waypoint
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {0.5, 0.0},  // Projects to middle of (0,0)→(1,0)
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {0.5, 0.0},  // Projects to middle of (0,0)→(1,0)
+                                    {1.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.01));
 
@@ -248,13 +222,7 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_multiple_consecutive_within_tolerance) {
     using namespace viam::trajex::totg;
 
     // Multiple consecutive points within tolerance
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.02},
-        {2.0, 0.03},
-        {3.0, 0.01},
-        {4.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.02}, {2.0, 0.03}, {3.0, 0.01}, {4.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));
 
@@ -279,15 +247,65 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_direction_reversal) {
     BOOST_CHECK_EQUAL(p.size(), 2U);
 }
 
+BOOST_AUTO_TEST_CASE(tube_coalescing_return_to_start_bug) {
+    using namespace viam::trajex::totg;
+    using viam::trajex::arc_length;
+
+    // BUG REPRODUCER: Path that returns to the same position
+    // Pattern: A → B → A
+    // The intermediate waypoint B represents an intentional goal and must NOT be coalesced
+    xt::xarray<double> waypoints = {
+        {0.0, 0.0},  // Position A
+        {1.0, 0.0},  // Position B (move away)
+        {0.0, 0.0}   // Position A again (return)
+    };
+
+    path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));
+
+    // BUG: Current implementation incorrectly coalesces B because start==next (both are A)
+    // This creates a single segment from A→A with zero length, eliminating B entirely!
+    // CORRECT BEHAVIOR: Must preserve B as an intermediate goal
+    // Expected: 2 segments: A→B and B→A, total length = 2.0
+    BOOST_CHECK_EQUAL(p.size(), 2U);
+    BOOST_CHECK_CLOSE(static_cast<double>(p.length()), 2.0, 0.01);
+
+    // Verify we actually visit all waypoints
+    verify_path_visits_waypoints(p, waypoints, 0.1);
+}
+
+BOOST_AUTO_TEST_CASE(tube_coalescing_star_pattern) {
+    using namespace viam::trajex::totg;
+    using viam::trajex::arc_length;
+
+    // Realistic pattern: repeatedly returning to a hub position
+    // This mimics the integration test pattern
+    xt::xarray<double> waypoints = {
+        {0.0, 0.0},  // Hub
+        {1.0, 0.0},  // Spoke 1
+        {0.0, 0.0},  // Back to hub
+        {0.0, 1.0},  // Spoke 2
+        {0.0, 0.0}   // Back to hub
+    };
+
+    path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));
+
+    // Must preserve all spokes - each represents an intentional movement
+    // Expected: 4 segments connecting consecutive waypoints
+    BOOST_CHECK_EQUAL(p.size(), 4U);
+
+    // Total path length: 1 + 1 + 1 + 1 = 4.0
+    BOOST_CHECK_CLOSE(static_cast<double>(p.length()), 4.0, 0.01);
+
+    verify_path_visits_waypoints(p, waypoints, 0.1);
+}
+
 BOOST_AUTO_TEST_CASE(tube_coalescing_projection_beyond_next) {
     using namespace viam::trajex::totg;
 
     // Current waypoint projects beyond next waypoint
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {2.0, 0.0},  // Projects beyond (0,0)→(1,0)
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {2.0, 0.0},  // Projects beyond (0,0)→(1,0)
+                                    {1.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(1.0));  // Large tolerance
 
@@ -334,22 +352,18 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_projection_at_boundaries) {
     using namespace viam::trajex::totg;
 
     // Test projection exactly at anchor (projection ≈ 0)
-    xt::xarray<double> waypoints1 = {
-        {0.0, 0.0},
-        {0.0, 0.05},  // Perpendicular to line (0,0)→(1,0), projects at 0
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints1 = {{0.0, 0.0},
+                                     {0.0, 0.05},  // Perpendicular to line (0,0)→(1,0), projects at 0
+                                     {1.0, 0.0}};
 
     path p1 = path::create(waypoints1, path::options{}.set_max_linear_deviation(0.1));
     // Should keep middle point (projection at boundary)
     BOOST_CHECK_GE(p1.size(), 1U);
 
     // Test projection exactly at next (projection ≈ segment_length)
-    xt::xarray<double> waypoints2 = {
-        {0.0, 0.0},
-        {1.0, 0.05},  // Near end of segment, projects ≈ 1.0
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints2 = {{0.0, 0.0},
+                                     {1.0, 0.05},  // Near end of segment, projects ≈ 1.0
+                                     {1.0, 0.0}};
 
     path p2 = path::create(waypoints2, path::options{}.set_max_linear_deviation(0.1));
     // Should handle gracefully
@@ -360,11 +374,7 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_all_waypoints_identical) {
     using namespace viam::trajex::totg;
 
     // Degenerate case: all waypoints at same location
-    xt::xarray<double> waypoints = {
-        {1.0, 1.0},
-        {1.0, 1.0},
-        {1.0, 1.0}
-    };
+    xt::xarray<double> waypoints = {{1.0, 1.0}, {1.0, 1.0}, {1.0, 1.0}};
 
     // Should handle gracefully (segment_length check should catch)
     // Will try to create segments but they'll have zero length
@@ -375,14 +385,12 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_complex_pattern) {
     using namespace viam::trajex::totg;
 
     // Complex: multiple regions with different coalescing behavior
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {0.5, 0.01},  // Within tolerance of (0,0)→(1,0)
-        {1.0, 0.0},
-        {1.0, 0.5},   // Sharp turn up (outside tolerance)
-        {1.5, 0.51},  // Within tolerance of (1,0.5)→(2,0.5)
-        {2.0, 0.5}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {0.5, 0.01},  // Within tolerance of (0,0)→(1,0)
+                                    {1.0, 0.0},
+                                    {1.0, 0.5},   // Sharp turn up (outside tolerance)
+                                    {1.5, 0.51},  // Within tolerance of (1,0.5)→(2,0.5)
+                                    {2.0, 0.5}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.05));
 
@@ -397,11 +405,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_first_waypoint_duplicate) {
     using namespace viam::trajex::totg;
 
     // First two waypoints identical
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {0.0, 0.0},  // Duplicate start
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {0.0, 0.0},  // Duplicate start
+                                    {1.0, 0.0}};
 
     // Should handle - duplicate should be coalesced
     BOOST_CHECK_NO_THROW(static_cast<void>(path::create(waypoints, path::options{}.set_max_linear_deviation(0.1))));
@@ -412,9 +418,7 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_last_waypoint_duplicate) {
 
     // Last two waypoints identical
     xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.0},
-        {1.0, 0.0}  // Duplicate end
+        {0.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}  // Duplicate end
     };
 
     // Tube coalescing handles duplicate: segment_length < 1e-10 causes continue
@@ -440,11 +444,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_very_small_tolerance) {
     using namespace viam::trajex::totg;
 
     // Test with tolerance near machine epsilon
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 1e-15},  // Tiny deviation (near machine epsilon)
-        {2.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 1e-15},  // Tiny deviation (near machine epsilon)
+                                    {2.0, 0.0}};
 
     // With tiny tolerance, middle point should be kept
     path p1 = path::create(waypoints, path::options{}.set_max_linear_deviation(1e-16));
@@ -459,14 +461,12 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_multiple_consecutive_duplicates) {
     using namespace viam::trajex::totg;
 
     // Multiple duplicates in a row
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.0},
-        {1.0, 0.0},  // Duplicate 1
-        {1.0, 0.0},  // Duplicate 2
-        {1.0, 0.0},  // Duplicate 3
-        {2.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 0.0},
+                                    {1.0, 0.0},  // Duplicate 1
+                                    {1.0, 0.0},  // Duplicate 2
+                                    {1.0, 0.0},  // Duplicate 3
+                                    {2.0, 0.0}};
 
     // All duplicates get skipped (segment_length < 1e-10)
     // After removing duplicates: (0,0), (1,0), (2,0)
@@ -484,7 +484,7 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_alternating_duplicates) {
         {1.0, 1.0},
         {1.0, 1.0},  // Duplicate of previous
         {2.0, 2.0},
-        {2.0, 2.0}   // Duplicate of previous
+        {2.0, 2.0}  // Duplicate of previous
     };
 
     // Duplicates get skipped, leaving (0,0), (1,1), (2,2)
@@ -498,14 +498,12 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_near_collinear_accumulating_error) {
 
     // Many points almost on a line with small perpendicular deviations
     // that alternate above/below the line
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.01},   // Slightly above
-        {2.0, -0.01},  // Slightly below
-        {3.0, 0.01},   // Slightly above
-        {4.0, -0.01},  // Slightly below
-        {5.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 0.01},   // Slightly above
+                                    {2.0, -0.01},  // Slightly below
+                                    {3.0, 0.01},   // Slightly above
+                                    {4.0, -0.01},  // Slightly below
+                                    {5.0, 0.0}};
 
     // With tolerance 0.02, all should coalesce to single segment
     path p1 = path::create(waypoints, path::options{}.set_max_linear_deviation(0.02));
@@ -528,11 +526,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_projection_exact_boundaries) {
     using namespace viam::trajex::totg;
 
     // Test projection exactly at 0.0 (perpendicular to anchor)
-    xt::xarray<double> waypoints1 = {
-        {0.0, 0.0},
-        {0.0, 0.01},  // Projection exactly at anchor (projection = 0)
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints1 = {{0.0, 0.0},
+                                     {0.0, 0.01},  // Projection exactly at anchor (projection = 0)
+                                     {1.0, 0.0}};
 
     // Point perpendicular to anchor has projection = 0, which is NOT < 0
     // So it passes the bounds check and is evaluated for perpendicular distance
@@ -545,11 +541,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_projection_exact_boundaries) {
     BOOST_CHECK_EQUAL(p1b.size(), 2U);
 
     // Test projection exactly at next waypoint
-    xt::xarray<double> waypoints2 = {
-        {0.0, 0.0},
-        {1.0, 0.01},  // Projection at next waypoint (projection ≈ segment_length)
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints2 = {{0.0, 0.0},
+                                     {1.0, 0.01},  // Projection at next waypoint (projection ≈ segment_length)
+                                     {1.0, 0.0}};
 
     // Point near next should coalesce if within tolerance
     // Projection ≈ 1.0, segment_length ≈ 1.0005, perpendicular distance ≈ 0.01
@@ -557,11 +551,9 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_projection_exact_boundaries) {
     BOOST_CHECK_EQUAL(p2.size(), 1U);
 
     // Test projection clearly beyond next waypoint
-    xt::xarray<double> waypoints3 = {
-        {0.0, 0.0},
-        {1.5, 0.0},  // Clearly beyond next waypoint (projection > segment_length)
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints3 = {{0.0, 0.0},
+                                     {1.5, 0.0},  // Clearly beyond next waypoint (projection > segment_length)
+                                     {1.0, 0.0}};
 
     // Point beyond next should be kept
     path p3 = path::create(waypoints3, path::options{}.set_max_linear_deviation(0.1));
@@ -577,13 +569,11 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_narrow_zigzag_at_boundary) {
     // Zigzag pattern with deviations exactly at tolerance boundary
     // Tests numerical stability when deviation ≈ max_deviation
     const double tol = 0.1;
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, tol * 0.99},      // Just inside tolerance
-        {2.0, -tol * 0.99},     // Just inside tolerance
-        {3.0, tol * 1.01},      // Just outside tolerance
-        {4.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, tol * 0.99},   // Just inside tolerance
+                                    {2.0, -tol * 0.99},  // Just inside tolerance
+                                    {3.0, tol * 1.01},   // Just outside tolerance
+                                    {4.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(tol));
 
@@ -627,17 +617,15 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_long_chain_mixed_pattern) {
 
     // Long chain with complex pattern: some coalesce, some don't
     // Tests that anchor updates correctly through many iterations
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {1.0, 0.01},   // Within tolerance of (0,0)→(2,0)
-        {2.0, 0.0},
-        {3.0, 0.5},    // Large deviation, forces new segment
-        {4.0, 0.51},   // Within tolerance of (3,0.5)→(5,0.5)
-        {5.0, 0.5},
-        {6.0, 0.0},    // Another large deviation
-        {7.0, 0.01},   // Within tolerance of (6,0)→(8,0)
-        {8.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {1.0, 0.01},  // Within tolerance of (0,0)→(2,0)
+                                    {2.0, 0.0},
+                                    {3.0, 0.5},   // Large deviation, forces new segment
+                                    {4.0, 0.51},  // Within tolerance of (3,0.5)→(5,0.5)
+                                    {5.0, 0.5},
+                                    {6.0, 0.0},   // Another large deviation
+                                    {7.0, 0.01},  // Within tolerance of (6,0)→(8,0)
+                                    {8.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));
 
@@ -667,10 +655,10 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_rapidly_changing_direction) {
     // Tests that projection bounds check correctly identifies non-monotonic motion
     xt::xarray<double> waypoints = {
         {0.0, 0.0},
-        {1.0, 0.0},   // Move right
-        {0.5, 0.0},   // Reverse left (projection < 0 from waypoint 1)
-        {1.5, 0.0},   // Jump ahead right (projection > segment_length from 0.5)
-        {1.0, 0.0}    // Back to middle
+        {1.0, 0.0},  // Move right
+        {0.5, 0.0},  // Reverse left (projection < 0 from waypoint 1)
+        {1.5, 0.0},  // Jump ahead right (projection > segment_length from 0.5)
+        {1.0, 0.0}   // Back to middle
     };
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));
@@ -693,13 +681,11 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_many_near_duplicates) {
 
     // Many points clustered tightly together (near-duplicates but not exact)
     // Tests handling of very short segments
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0},
-        {0.0, 1e-11},  // Essentially duplicate (< 1e-10 threshold)
-        {1e-11, 0.0},  // Essentially duplicate
-        {1e-11, 1e-11},  // Essentially duplicate
-        {1.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0},
+                                    {0.0, 1e-11},    // Essentially duplicate (< 1e-10 threshold)
+                                    {1e-11, 0.0},    // Essentially duplicate
+                                    {1e-11, 1e-11},  // Essentially duplicate
+                                    {1.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));
 
@@ -719,14 +705,12 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_high_dimension_corner_cases) {
 
     // High-dimensional path with complex geometry
     // Tests that algorithm works correctly in higher dimensions
-    xt::xarray<double> waypoints = {
-        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-        {1.0, 0.01, 0.0, 0.0, 0.0, 0.0},  // Small deviation in one dimension
-        {2.0, 0.0, 0.01, 0.0, 0.0, 0.0},  // Small deviation in different dimension
-        {3.0, 0.0, 0.0, 0.5, 0.0, 0.0},   // Large deviation
-        {4.0, 0.0, 0.0, 0.5, 0.01, 0.0},  // Continue from new anchor
-        {5.0, 0.0, 0.0, 0.5, 0.0, 0.0}
-    };
+    xt::xarray<double> waypoints = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+                                    {1.0, 0.01, 0.0, 0.0, 0.0, 0.0},  // Small deviation in one dimension
+                                    {2.0, 0.0, 0.01, 0.0, 0.0, 0.0},  // Small deviation in different dimension
+                                    {3.0, 0.0, 0.0, 0.5, 0.0, 0.0},   // Large deviation
+                                    {4.0, 0.0, 0.0, 0.5, 0.01, 0.0},  // Continue from new anchor
+                                    {5.0, 0.0, 0.0, 0.5, 0.0, 0.0}};
 
     path p = path::create(waypoints, path::options{}.set_max_linear_deviation(0.1));
 
@@ -742,5 +726,76 @@ BOOST_AUTO_TEST_CASE(tube_coalescing_high_dimension_corner_cases) {
     verify_path_visits_waypoints(p, waypoints, 0.1);
 }
 
+BOOST_AUTO_TEST_CASE(tube_coalescing_drift_revalidation) {
+    using namespace viam::trajex::totg;
+    using viam::trajex::arc_length;
+
+    // Test that revalidation prevents accumulated error.
+    // Without revalidation, waypoints that individually pass tolerance checks
+    // could accumulate error that violates the constraint.
+    //
+    // This test verifies that the revalidation mechanism catches such cases
+    // by checking that all skipped waypoints remain within tolerance when
+    // the tube is extended.
+
+    const double tol = 0.1;
+
+    // Create a path with multiple waypoints near the tolerance boundary
+    // Even if each individual check passes, we want to ensure that
+    // accumulated checks via revalidation keep all points within tolerance
+    xt::xarray<double> waypoints = {
+        {0.0, 0.0},
+        {1.0, 0.0},    // On the line
+        {2.0, 0.095},  // Near tolerance boundary
+        {3.0, 0.0},    // Back near the line
+        {4.0, -0.095}  // Near tolerance boundary on other side
+    };
+
+    // Case 1: Only linear coalescing, no blends
+    path p1 = path::create(waypoints, path::options{}.set_max_linear_deviation(tol).set_max_blend_deviation(0.0));
+
+    // With revalidation: should emit multiple segments to prevent drift
+    // All segments should be linear (no blends)
+    BOOST_CHECK_EQUAL(p1.size(), 2U);
+    for (auto it = p1.begin(); it != p1.end(); ++it) {
+        BOOST_CHECK((*it).template is<path::segment::linear>());
+    }
+    verify_path_visits_waypoints(p1, waypoints, tol);
+
+    // Case 2: Only blends, no linear coalescing
+    path p2 = path::create(waypoints, path::options{}.set_max_linear_deviation(0.0).set_max_blend_deviation(tol));
+
+    // No coalescing, but blends at corners
+    // With 5 waypoints, we have 4 consecutive segments between them
+    // Blends are added at corners, so we expect 4 linear segments + 2 circular blends
+    BOOST_CHECK_EQUAL(p2.size(), 6U);
+
+    // Count segment types
+    size_t linear_count = 0;
+    size_t circular_count = 0;
+    for (auto it = p2.begin(); it != p2.end(); ++it) {
+        if ((*it).template is<path::segment::linear>()) {
+            linear_count++;
+        } else {
+            circular_count++;
+        }
+    }
+
+    // Should have 4 linear segments (one between each consecutive waypoint pair)
+    BOOST_CHECK_EQUAL(linear_count, 4U);
+    // Should have 2 circular blends (not all corners get blends due to geometry)
+    BOOST_CHECK_EQUAL(circular_count, 2U);
+
+    verify_path_visits_waypoints(p2, waypoints, tol);
+
+    // Case 3: Both linear coalescing and blends
+    path p3 = path::create(waypoints, path::options{}.set_max_linear_deviation(tol).set_max_blend_deviation(tol));
+
+    // With both coalescing and blending, some waypoints are coalesced
+    // Remaining corners have blends
+    // Expected: 2 linear segments + 1 circular blend = 3 segments
+    BOOST_CHECK_EQUAL(p3.size(), 3U);
+    verify_path_visits_waypoints(p3, waypoints, tol);
+}
 
 BOOST_AUTO_TEST_SUITE_END()

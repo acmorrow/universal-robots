@@ -507,6 +507,7 @@ enum class integration_event : std::uint8_t {
     arc_length before = previous_position;
     arc_length after = *escape_region_start;
 
+    // TODO: Eleminiate this hardcoded constant.
     constexpr int max_bisection_iterations = 100;
     for (int iteration = 0; iteration < max_bisection_iterations; ++iteration) {
         // Check convergence
