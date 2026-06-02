@@ -50,6 +50,7 @@ function(viam_ur_apply_wall_werror target_name)
       -Wunused
       # TODO(RSDK-11300): rm after upgrading boost https://github.com/boostorg/mpl/issues/69
       -Wno-enum-constexpr-conversion
+      -Wno-unknown-warning-option
     )
   elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     target_compile_options(${target_name} PRIVATE /W4 /WX)
