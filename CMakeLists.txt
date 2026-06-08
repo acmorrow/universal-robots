@@ -223,9 +223,9 @@ target_include_directories(viam-ur
 
 target_sources(viam-ur
   PRIVATE
-    src/viam/ur/module/dh_kinematics.cpp
     src/viam/ur/module/trajectory_logger.cpp
     src/viam/ur/module/ur_arm.cpp
+    src/viam/ur/module/ur_arm_model.cpp
     src/viam/ur/module/ur_arm_state.cpp
     src/viam/ur/module/ur_arm_state_connected.cpp
     src/viam/ur/module/ur_arm_state_controlled.cpp
@@ -288,6 +288,15 @@ target_sources(universal-robots-test
 target_link_libraries(universal-robots-test
   PRIVATE
     viam-ur
+)
+
+# Inject the absolute path to the shipped `kinematics/` data so the test
+# binary can load `<model>.json` regardless of the cwd it's invoked from
+# (otherwise tests have to derive paths from `__FILE__`, which breaks
+# under installed/relocated builds).
+target_compile_definitions(universal-robots-test
+  PRIVATE
+    VIAM_UR_TEST_KINEMATICS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/kinematics"
 )
 
 viam_ur_apply_wall_werror(universal-robots-test)
